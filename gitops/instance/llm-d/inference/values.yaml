@@ -1,0 +1,130 @@
+# Deployment type (required; chart fails if not one of these):
+# - intelligent-inference:  single pool with full EPP scheduler (prefix-cache, queue, kv-cache scoring)
+# - pd-disaggregation:     split prefill + decode pools, NixlConnector KV transfer
+deploymentType: intelligent-inference
+
+# When true and deploymentType is intelligent-inference: use minimal scheduler {} and
+# startupProbe when useStartupProbe is true (gpt-oss-20b style). When false: full EPP scheduler.
+intelligentInferenceSimple: false
+
+# ── Scheduler (EPP) TLS ───────────────────────────────────────────────────────
+# By default the EPP uses a self-signed certificate (--cert-path is not set).
+# To use your own TLS certificates (e.g. from cert-manager):
+#   1. Create a Secret with keys tls.crt and tls.key in the same namespace.
+#   2. Set schedulerTLS.enabled to true and schedulerTLS.secretName to that secret.
+# The EPP expects files named tls.crt and tls.key in the mount path (see GIE/llm-d docs).
+schedulerTLS:
+  enabled: false
+  secretName: ""   # e.g. epp-serving-tls
+  mountPath: /etc/epp/tls
+
+# Name of the LLMInferenceService (also used as PVC name when storage.pvc is set)
+serviceName: my-model
+
+# Number of decode / main replicas
+replicas: 1
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+
+model:
+  name: facebook/opt-125m
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+# type:
+#   hf  – pull from HuggingFace Hub (uri: hf://org/model)
+#   oci – pull from an OCI/ModelCar image (uri: oci://registry/repo:tag)
+#
+# Add a pvc section to create a PersistentVolumeClaim (named after serviceName)
+# and mount it as kserve-provision-location for local model caching:
+#   pvc:
+#     size: 40Gi
+#     accessMode: ReadWriteOnce
+# storage:
+#   type: hf
+#   uri: hf://facebook/opt-125m
+#   pvc:
+#     size: 40Gi
+#     accessMode: ReadWriteOnce
+
+# ── Resources (decode / main container) ──────────────────────────────────────
+
+resources:
+  limits:
+    cpu: "1"
+    memory: 8Gi
+    # gpuCount: "1"
+  requests:
+    cpu: "1"
+    memory: 8Gi
+    # gpuCount: "1"
+
+# ── Liveness / startup probe ────────────────────────────────────────────────
+# When useStartupProbe is true (e.g. gpt-oss-20b style): emit startupProbe and
+# minimal livenessProbe (initialDelaySeconds: 10 only). Otherwise use full livenessProbe below.
+useStartupProbe: false
+decodeStartupProbePort: 8001   # decode/main container when useStartupProbe (pd)
+mainStartupProbePort: 8000    # prefill and int-inference-simple main
+startupProbe:
+  initialDelaySeconds: 15     # for intelligent-inference-simple main only
+  timeoutSeconds: 10
+  periodSeconds: 10
+  failureThreshold: 60
+
+livenessProbe:
+  path: /health
+  port: 8000
+  initialDelaySeconds: 120
+  periodSeconds: 30
+  timeoutSeconds: 30
+  failureThreshold: 5
+
+# ── Extra env vars appended to the main container ────────────────────────────
+# For pd-disaggregation the VLLM_NIXL_* and VLLM_ADDITIONAL_ARGS env vars are
+# already set by the template; use this list for any additional overrides.
+env: []
+# env:
+#   - name: VLLM_ADDITIONAL_ARGS
+#     value: "--disable-uvicorn-access-log"
+
+# ── Intelligent-inference: scheduler (EPP) config ────────────────────────────
+
+scheduler:
+  hashBlockSize: 64              # block size 16 * 4 chars/token
+  maxPrefixBlocksToMatch: 256    # matches up to ~4k tokens
+  lruCapacityPerServer: 39744    # total blocks (635904) / block size (16)
+
+# ── PD disaggregation: prefill pool ──────────────────────────────────────────
+
+prefill:
+  replicas: 1
+  resources:
+    limits:
+      cpu: "4"
+      memory: 8Gi
+      gpuCount: "1"
+    requests:
+      cpu: "4"
+      memory: 8Gi
+      gpuCount: "1"
+  livenessProbe:
+    path: /health
+    port: 8000
+    initialDelaySeconds: 120
+    periodSeconds: 30
+    timeoutSeconds: 30
+    failureThreshold: 5
+
+# ── PD disaggregation: scheduler (EPP) config ────────────────────────────────
+
+pdScheduler:
+  threshold: 30000
+  maxNumOfEndpoints: 1
+
+# ── PD disaggregation: NixlConnector KV transfer config ──────────────────────
+
+kvTransfer:
+  blockSize: 128
+  abortRequestTimeout: "100000"
+  loggingLevel: "DEBUG"   # set to "" to omit VLLM_LOGGING_LEVEL env (e.g. qwen-pd playbook)
+  vllmArgsOrder: "uvicorn_first"   # "uvicorn_first" | "kv_first" for VLLM_ADDITIONAL_ARGS
+  envOrder: "gpt_first"            # "gpt_first" (VLLM_ADDITIONAL_ARGS first) | "nixl_first" (VLLM_NIXL_* first, qwen-pd style)

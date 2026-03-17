@@ -1,0 +1,74 @@
+{{- $amiId := required "gpu-worker: amiId must be set (e.g. --set amiId=ami-xxxxx)" .Values.amiId -}}
+{{- $region := required "gpu-worker: region must be set (e.g. --set region=eu-west-1)" .Values.region -}}
+{{- $az := required "gpu-worker: az must be set (e.g. --set az=a)" .Values.az -}}
+{{- $instanceType := required "gpu-worker: instanceType must be set (e.g. --set instanceType=g5.2xlarge)" .Values.instanceType -}}
+apiVersion: machine.openshift.io/v1beta1
+kind: MachineSet
+metadata:
+  labels:
+    machine.openshift.io/cluster-api-cluster: {{ .Values.infrastructureId | quote }}
+  name: {{ .Values.infrastructureId }}-{{ .Values.prefix }}{{ .Values.role }}-{{ $region }}{{ $az }}
+  namespace: openshift-machine-api
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      machine.openshift.io/cluster-api-cluster: {{ .Values.infrastructureId | quote }}
+      machine.openshift.io/cluster-api-machineset: {{ .Values.infrastructureId }}-{{ .Values.prefix }}{{ .Values.role }}-{{ $region }}{{ $az }}
+  template:
+    metadata:
+      labels:
+        machine.openshift.io/cluster-api-cluster: {{ .Values.infrastructureId | quote }}
+        machine.openshift.io/cluster-api-machine-role: {{ .Values.role | quote }}
+        machine.openshift.io/cluster-api-machine-type: {{ .Values.role | quote }}
+        machine.openshift.io/cluster-api-machineset: {{ .Values.infrastructureId }}-{{ .Values.prefix }}{{ .Values.role }}-{{ $region }}{{ $az }}
+    spec:
+      metadata:
+        labels:
+          node-role.kubernetes.io/{{ .Values.role }}: ""
+          node-role.kubernetes.io/{{ .Values.prefix }}{{ .Values.role }}: ""
+          {{- if .Values.devicePluginConfig }}
+          nvidia.com/device-plugin.config: {{ .Values.devicePluginConfig | quote }}
+          {{- end }}
+      taints:
+        - key: nvidia.com/gpu
+          effect: NoSchedule
+      providerSpec:
+        value:
+          ami:
+            id: {{ $amiId | quote }}
+          apiVersion: awsproviderconfig.openshift.io/v1beta1
+          blockDevices:
+            - ebs:
+                iops: {{ .Values.rootVolumeIops }}
+                volumeSize: {{ .Values.rootVolumeSize }}
+                volumeType: {{ .Values.rootVolumeType | quote }}
+          credentialsSecret:
+            name: aws-cloud-credentials
+          deviceIndex: 0
+          iamInstanceProfile:
+            id: {{ .Values.infrastructureId }}-worker-profile
+          instanceType: {{ $instanceType | quote }}
+          kind: AWSMachineProviderConfig
+          placement:
+            availabilityZone: {{ $region }}{{ $az }}
+            region: {{ $region | quote }}
+          securityGroups:
+            - filters:
+                - name: tag:Name
+                  values:
+                    - {{ .Values.infrastructureId }}-node
+            - filters:
+                - name: tag:Name
+                  values:
+                    - {{ .Values.infrastructureId }}-lb
+          subnet:
+            filters:
+              - name: tag:Name
+                values:
+                  - {{ .Values.infrastructureId }}-subnet-private-{{ $region }}{{ $az }}
+          tags:
+            - name: kubernetes.io/cluster/{{ .Values.infrastructureId }}
+              value: owned
+          userDataSecret:
+            name: worker-user-data

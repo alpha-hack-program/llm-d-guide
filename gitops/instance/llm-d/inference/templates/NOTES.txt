@@ -1,0 +1,65 @@
+# LLMInferenceService deployed
+
+- **Release:** {{ .Release.Name }}
+- **Namespace:** {{ .Release.Namespace }}
+
+## Resource
+
+| Resource | Name |
+|----------|------|
+| LLMInferenceService | `{{ .Values.serviceName }}` |
+
+## Configuration summary
+
+| Setting | Value |
+|---------|-------|
+| Deployment type | {{ .Values.deploymentType }} |
+| Model | {{ .Values.model.name }} |
+| Storage | {{ .Values.storage.type }} – {{ .Values.storage.uri }} |
+| Replicas | {{ .Values.replicas }} |
+{{- if eq .Values.deploymentType "intelligent-inference" }}
+| Scheduler | {{ if .Values.intelligentInferenceSimple }}simple (minimal scheduler){{ else }}full EPP (prefix-cache, queue, kv-cache scoring){{ end }} |
+{{- end }}
+{{- if eq .Values.deploymentType "pd-disaggregation" }}
+| Prefill replicas | {{ .Values.prefill.replicas }} |
+{{- end }}
+{{- if and .Values.schedulerTLS.enabled .Values.schedulerTLS.secretName }}
+| Scheduler TLS | enabled (secret: `{{ .Values.schedulerTLS.secretName }}`) |
+{{- else }}
+| Scheduler TLS | self-signed (EPP default) |
+{{- end }}
+
+## Verify
+
+```bash
+# LLMInferenceService status
+oc get llminferenceservice {{ .Values.serviceName }} -n {{ .Release.Namespace }}
+
+# Workload pods (decode/main and, for pd-disaggregation, prefill)
+oc get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/part-of=llminferenceservice
+
+# HTTPRoute (bound to Gateway)
+oc get httproute -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ .Values.serviceName }}
+
+# InferencePool (created by the controller for the EPP)
+oc get inferencepool -n {{ .Release.Namespace }}
+```
+
+## Test inference
+
+Use your Gateway hostname and auth (e.g. JWT or AuthPolicy). Example:
+
+```bash
+GATEWAY_HOST="https://<your-gateway-host>"
+TOKEN="<your-token>"
+
+curl -sk "${GATEWAY_HOST}/{{ .Release.Namespace }}/{{ .Values.serviceName }}/v1/models" \
+  -H "Authorization: Bearer ${TOKEN}"
+
+curl -sk "${GATEWAY_HOST}/{{ .Release.Namespace }}/{{ .Values.serviceName }}/v1/chat/completions" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"{{ .Values.model.name }}","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
+```
+
+**Gateway TLS:** Ensure the Gateway listener has a valid certificate secret (e.g. cert-manager Certificate or existing ingress secret). See GUIDE.md section "8.4.6 TLS for the scheduler (EPP)" and "9.6 TLS for MaaS Endpoints".

@@ -1,0 +1,50 @@
+apiVersion: modelregistry.opendatahub.io/v1alpha1
+kind: ModelRegistry
+metadata:
+  name: {{ include "model-registry.fullname" . }}
+  namespace: {{ .Values.registry.namespace }}
+  labels:
+    {{- include "model-registry.labels" . | nindent 4 }}
+  annotations:
+    openshift.io/description: ""
+    openshift.io/display-name: {{ include "model-registry.fullname" . }}
+spec:
+  grpc:
+    {{- if .Values.registry.grpc.image }}
+    image: {{ .Values.registry.grpc.image }}
+    {{- end }}
+    port: {{ .Values.registry.grpc.port | default 9090 }}
+    {{- with .Values.registry.grpc.resources }}
+    resources:
+      limits:
+        cpu: {{ .limits.cpu | default "100m" }}
+        memory: {{ .limits.memory | default "256Mi" }}
+      requests:
+        cpu: {{ .requests.cpu | default "100m" }}
+        memory: {{ .requests.memory | default "256Mi" }}
+    {{- end }}
+
+  rest:
+    {{- if .Values.registry.rest.image }}
+    image: {{ .Values.registry.rest.image }}
+    {{- end }}
+    port: {{ .Values.registry.rest.port | default 8080 }}
+    {{- with .Values.registry.rest.resources }}
+    resources:
+      limits:
+        cpu: {{ .limits.cpu | default "100m" }}
+        memory: {{ .limits.memory | default "256Mi" }}
+      requests:
+        cpu: {{ .requests.cpu | default "100m" }}
+        memory: {{ .requests.memory | default "256Mi" }}
+    {{- end }}
+    serviceRoute: {{ .Values.registry.rest.serviceRoute | default "disabled" }}
+
+  mysql:
+    database: metadb
+    host: {{ include "model-registry.fullname" . }}-db.rhoai-model-registries.svc.cluster.local
+    passwordSecret:
+      key: database-password
+      name: {{ include "model-registry.fullname" . }}-db
+    port: {{ .Values.registryDb.databasePort | default 3306 }}
+    username: root

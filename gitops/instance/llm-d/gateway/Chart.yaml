@@ -1,0 +1,4 @@
+apiVersion: v2
+description: Gateway resources for llm-d demo
+name: gateway
+version: 1.0.0

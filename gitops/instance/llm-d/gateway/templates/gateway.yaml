@@ -1,0 +1,34 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: openshift-default
+spec:
+  controllerName: openshift.io/gateway-controller/v1
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: openshift-ai-inference
+  namespace: {{ .Values.gatewayNamespace }}
+spec:
+  gatewayClassName: openshift-default
+  listeners:
+  - name: http
+    hostname: "inference.{{ .Values.clusterDomain }}"
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: All
+  - name: https
+    hostname: "inference.{{ .Values.clusterDomain }}"
+    port: 443
+    protocol: HTTPS
+    allowedRoutes:
+      namespaces:
+        from: All
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: {{ .Values.tlsSecretName }}
+        kind: Secret

@@ -1,0 +1,14 @@
+{{- if and .Values.storage .Values.storage.pvc .Values.storage.pvc.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.serviceName }}
+spec:
+  accessModes:
+    - {{ .Values.storage.pvc.accessMode | default "ReadWriteOnce" }}
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: {{ .Values.storage.pvc.size }}
+{{- end }}

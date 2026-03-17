@@ -1,0 +1,57 @@
+# Base values for compare-inference-manifests.sh (no default PVC).
+# Same as chart values.yaml but storage has no pvc block so only cases that
+# explicitly set storage.pvc get a PVC.
+deploymentType: intelligent-inference
+intelligentInferenceSimple: false
+serviceName: my-model
+replicas: 1
+model:
+  name: facebook/opt-125m
+storage:
+  type: hf
+  uri: hf://facebook/opt-125m
+  pvc: null   # no default PVC; chart values.yaml has one, so override with null for compare
+resources:
+  limits: { cpu: "1", memory: 8Gi, gpuCount: "1" }
+  requests: { cpu: "1", memory: 8Gi, gpuCount: "1" }
+useStartupProbe: false
+decodeStartupProbePort: 8001
+mainStartupProbePort: 8000
+startupProbe:
+  initialDelaySeconds: 15
+  timeoutSeconds: 10
+  periodSeconds: 10
+  failureThreshold: 60
+livenessProbe:
+  path: /health
+  port: 8000
+  initialDelaySeconds: 120
+  periodSeconds: 30
+  timeoutSeconds: 30
+  failureThreshold: 5
+env: []
+scheduler:
+  hashBlockSize: 64
+  maxPrefixBlocksToMatch: 256
+  lruCapacityPerServer: 39744
+prefill:
+  replicas: 1
+  resources:
+    limits: { cpu: "4", memory: 8Gi, gpuCount: "1" }
+    requests: { cpu: "4", memory: 8Gi, gpuCount: "1" }
+  livenessProbe:
+    path: /health
+    port: 8000
+    initialDelaySeconds: 120
+    periodSeconds: 30
+    timeoutSeconds: 30
+    failureThreshold: 5
+pdScheduler:
+  threshold: 30000
+  maxNumOfEndpoints: 1
+kvTransfer:
+  blockSize: 128
+  abortRequestTimeout: "100000"
+  loggingLevel: "DEBUG"
+  vllmArgsOrder: "uvicorn_first"
+  envOrder: "gpt_first"

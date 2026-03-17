@@ -1,0 +1,4 @@
+# Keep existing instance manifests if used outside Helm
+# dsci.yaml
+# dsc.yaml
+# odhdashboardconfig.yaml

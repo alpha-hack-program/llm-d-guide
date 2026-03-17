@@ -1,0 +1,43 @@
+# Default values for gpu-worker.
+# This chart creates an OpenShift MachineSet for GPU workers on AWS.
+
+# Number of GPU worker nodes to create
+replicas: 1
+
+# Role of the node (worker or master normally)
+role: worker
+
+# AWS region for the nodes (required, no default). Set via --set region=eu-west-1
+region: ""
+
+# Availability zone suffix, e.g. a, b, c (required, no default). Set via --set az=a
+az: ""
+
+# Prefix attached to the node name and role (e.g. gpu- yields gpu-worker)
+prefix: "gpu-"
+
+# AMI ID of the CoreOS image in the target AWS region (required, no default).
+# AMI IDs are region-specific; use the AMI for your chosen region.
+# Get it from an existing worker: oc get machineset -n openshift-machine-api <name> -o jsonpath='{.spec.template.spec.providerSpec.value.ami.id}'
+# Set via --set amiId=ami-xxxxx
+amiId: ""
+
+# EC2 instance type (required, no default). Set via --set instanceType=g5.2xlarge
+instanceType: ""
+
+# Device plugin config for time-slicing (e.g. A100-SXM4-40GB).
+# Set to empty string to disable time-slicing.
+devicePluginConfig: "A100-SXM4-40GB"
+
+# Cluster infrastructure ID (required). Obtain from:
+# oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}'
+infrastructureId: ""
+
+# Optional: override the root volume size (GiB)
+rootVolumeSize: 120
+
+# Optional: root volume type
+rootVolumeType: gp2
+
+# Optional: root volume IOPS (0 for gp2 default)
+rootVolumeIops: 0

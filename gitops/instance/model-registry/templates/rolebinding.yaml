@@ -1,0 +1,44 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "model-registry.fullname" . }}
+  labels:
+    app: {{ include "model-registry.fullname" . }}
+    app.kubernetes.io/component: {{ include "model-registry.fullname" . }}
+    app.kubernetes.io/created-by: {{ include "model-registry.fullname" . }}-operator
+    app.kubernetes.io/part-of: {{ include "model-registry.fullname" . }}
+    component: {{ include "model-registry.fullname" . }}
+  {{- include "model-registry.labels" . | nindent 4 }}
+  annotations:
+    openshift.io/description: Can access Model Registry registry
+    openshift.io/display-name: Registry User registry
+rules:
+- apiGroups:
+  - ""
+  resourceNames:
+  - {{ include "model-registry.fullname" . }}
+  resources:
+  - services
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "model-registry.fullname" . }}-dashboard-permissions-everybody
+  labels:
+    app: registry
+    app.kubernetes.io/component: registry
+    app.kubernetes.io/part-of: registry
+    component: registry
+    opendatahub.io/dashboard: "true"
+  {{- include "model-registry.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "model-registry.fullname" . }}
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:authenticated
+  namespace: '{{ .Release.Namespace }}'

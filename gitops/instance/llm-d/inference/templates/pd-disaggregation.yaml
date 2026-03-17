@@ -1,0 +1,232 @@
+{{- include "inference.validateDeploymentType" . }}
+{{- include "inference.validateStorageType" . }}
+
+{{- if eq .Values.deploymentType "pd-disaggregation" }}
+{{- if not .Values.storage }}
+{{- fail "intelligent-inference requires values.storage to be set" }}
+{{- end }}
+{{- if not .Values.storage.uri }}
+{{- fail "intelligent-inference requires values.storage.uri to be set" }}
+{{- end }}
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: {{ .Values.serviceName }}
+  {{- if eq .Values.storage.type "oci" }}
+  annotations:
+    opendatahub.io/connections: {{ .Values.serviceName }}-connection
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicas }}
+  model:
+    uri: {{ .Values.storage.uri }}
+    name: {{ .Values.model.name }}
+  router:
+    scheduler:
+      template:
+        {{- if and .Values.schedulerTLS.enabled .Values.schedulerTLS.secretName }}
+        volumes:
+          - name: epp-tls
+            secret:
+              secretName: {{ .Values.schedulerTLS.secretName }}
+        {{- end }}
+        containers:
+          - name: main
+            {{- if and .Values.schedulerTLS.enabled .Values.schedulerTLS.secretName }}
+            volumeMounts:
+              - name: epp-tls
+                mountPath: {{ .Values.schedulerTLS.mountPath }}
+                readOnly: true
+            {{- end }}
+            args:
+              - -v=4
+              - --pool-name
+              - "{{ "{{" }} ChildName .ObjectMeta.Name `-inference-pool` {{ "}}" }}"
+              - --pool-namespace
+              - "{{ "{{" }} .ObjectMeta.Namespace {{ "}}" }}"
+              - --zap-encoder
+              - json
+              - --grpc-port
+              - "9002"
+              - --grpc-health-port
+              - "9003"
+              - --secure-serving
+              - --model-server-metrics-scheme
+              - https
+              - --model-server-metrics-https-insecure-skip-verify
+              {{- if and .Values.schedulerTLS.enabled .Values.schedulerTLS.secretName }}
+              - --cert-path
+              - {{ .Values.schedulerTLS.mountPath | quote }}
+              {{- end }}
+              - --config-text
+              - |2
+
+                apiVersion: inference.networking.x-k8s.io/v1alpha1
+                kind: EndpointPickerConfig
+                plugins:
+                - type: pd-profile-handler
+                  parameters:
+                    threshold: {{ .Values.pdScheduler.threshold }}
+                - type: prefill-header-handler
+                - type: prefill-filter
+                - type: decode-filter
+                - type: random-picker
+                  parameters:
+                    maxNumOfEndpoints: {{ .Values.pdScheduler.maxNumOfEndpoints }}
+                schedulingProfiles:
+                - name: prefill
+                  plugins:
+                  - pluginRef: prefill-filter
+                  - pluginRef: random-picker
+                - name: decode
+                  plugins:
+                  - pluginRef: decode-filter
+                  - pluginRef: random-picker
+    gateway: {}
+    route: {}
+  template:
+    tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+    {{- if and .Values.storage.pvc .Values.storage.pvc.size }}
+    volumes:
+      - name: kserve-provision-location
+        persistentVolumeClaim:
+          claimName: {{ .Values.serviceName }}  
+    {{- end }}
+    containers:
+      - name: main
+        env:
+          {{- if eq (.Values.kvTransfer.envOrder | default "gpt_first") "nixl_first" }}
+          - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          - name: VLLM_NIXL_ABORT_REQUEST_TIMEOUT
+            value: {{ .Values.kvTransfer.abortRequestTimeout | quote }}
+          - name: VLLM_ADDITIONAL_ARGS
+            value: {{ if eq (.Values.kvTransfer.vllmArgsOrder | default "uvicorn_first") "kv_first" }}"--kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_both\"}' --disable-uvicorn-access-log --block-size {{ .Values.kvTransfer.blockSize }}"{{ else }}"--disable-uvicorn-access-log --kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_both\"}' --block-size {{ .Values.kvTransfer.blockSize }}"{{ end }}
+          {{- if .Values.kvTransfer.loggingLevel }}
+          - name: VLLM_LOGGING_LEVEL
+            value: {{ .Values.kvTransfer.loggingLevel | quote }}
+          {{- end }}
+          {{- else }}
+          - name: VLLM_ADDITIONAL_ARGS
+            value: {{ if eq (.Values.kvTransfer.vllmArgsOrder | default "uvicorn_first") "kv_first" }}"--kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_both\"}' --disable-uvicorn-access-log --block-size {{ .Values.kvTransfer.blockSize }}"{{ else }}"--disable-uvicorn-access-log --kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_both\"}' --block-size {{ .Values.kvTransfer.blockSize }}"{{ end }}
+          - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+          {{- if .Values.kvTransfer.loggingLevel }}
+          - name: VLLM_LOGGING_LEVEL
+            value: {{ .Values.kvTransfer.loggingLevel | quote }}
+          {{- end }}
+          - name: VLLM_NIXL_ABORT_REQUEST_TIMEOUT
+            value: {{ .Values.kvTransfer.abortRequestTimeout | quote }}
+          {{- end }}
+          {{- if and .Values.env (gt (len .Values.env) 0) }}
+          {{- toYaml .Values.env | nindent 10 }}
+          {{- end }}
+        resources:
+          limits:
+            cpu: {{ .Values.resources.limits.cpu | quote }}
+            memory: {{ .Values.resources.limits.memory }}
+            nvidia.com/gpu: {{ .Values.resources.limits.gpuCount | quote }}
+          requests:
+            cpu: {{ .Values.resources.requests.cpu | quote }}
+            memory: {{ .Values.resources.requests.memory }}
+            nvidia.com/gpu: {{ .Values.resources.requests.gpuCount | quote }}
+        {{- if .Values.useStartupProbe }}
+        livenessProbe:
+          initialDelaySeconds: 10
+        startupProbe:
+          httpGet:
+            path: {{ .Values.livenessProbe.path }}
+            port: {{ .Values.decodeStartupProbePort }}
+            scheme: HTTPS
+          failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+        {{- else }}
+        livenessProbe:
+          httpGet:
+            path: {{ .Values.livenessProbe.path }}
+            port: {{ .Values.livenessProbe.port }}
+            scheme: HTTPS
+          initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+          failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+        {{- end }}
+  prefill:
+    replicas: {{ .Values.prefill.replicas }}
+    template:
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: main
+          env:
+            {{- if eq (.Values.kvTransfer.envOrder | default "gpt_first") "nixl_first" }}
+            - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: VLLM_ADDITIONAL_ARGS
+              value: {{ if eq (.Values.kvTransfer.vllmArgsOrder | default "uvicorn_first") "kv_first" }}"--kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_both\"}' --disable-uvicorn-access-log --block-size {{ .Values.kvTransfer.blockSize }}"{{ else }}"--disable-uvicorn-access-log --kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_both\"}' --block-size {{ .Values.kvTransfer.blockSize }}"{{ end }}
+            - name: VLLM_NIXL_ABORT_REQUEST_TIMEOUT
+              value: {{ .Values.kvTransfer.abortRequestTimeout | quote }}
+            {{- else }}
+            - name: VLLM_ADDITIONAL_ARGS
+              value: {{ if eq (.Values.kvTransfer.vllmArgsOrder | default "uvicorn_first") "kv_first" }}"--kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_both\"}' --disable-uvicorn-access-log --block-size {{ .Values.kvTransfer.blockSize }}"{{ else }}"--disable-uvicorn-access-log --kv-transfer-config '{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"kv_both\"}' --block-size {{ .Values.kvTransfer.blockSize }}"{{ end }}
+            - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- if .Values.kvTransfer.loggingLevel }}
+            - name: VLLM_LOGGING_LEVEL
+              value: {{ .Values.kvTransfer.loggingLevel | quote }}
+            {{- end }}
+            - name: VLLM_NIXL_ABORT_REQUEST_TIMEOUT
+              value: {{ .Values.kvTransfer.abortRequestTimeout | quote }}
+            {{- end }}
+            {{- if and .Values.env (gt (len .Values.env) 0) }}
+            {{- toYaml .Values.env | nindent 12 }}
+            {{- end }}
+          resources:
+            limits:
+              cpu: {{ .Values.prefill.resources.limits.cpu | quote }}
+              memory: {{ .Values.prefill.resources.limits.memory }}
+              {{- if .Values.prefill.resources.limits.gpuCount }}
+              nvidia.com/gpu: {{ .Values.prefill.resources.limits.gpuCount | quote }}
+              {{- end }}
+            requests:
+              cpu: {{ .Values.prefill.resources.requests.cpu | quote }}
+              memory: {{ .Values.prefill.resources.requests.memory }}
+              {{- if .Values.prefill.resources.requests.gpuCount }}
+              nvidia.com/gpu: {{ .Values.prefill.resources.requests.gpuCount | quote }}
+              {{- end }}
+          {{- if .Values.useStartupProbe }}
+          livenessProbe:
+            initialDelaySeconds: 10
+          startupProbe:
+            httpGet:
+              path: {{ .Values.prefill.livenessProbe.path }}
+              port: {{ .Values.mainStartupProbePort }}
+              scheme: HTTPS
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+          {{- else }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.prefill.livenessProbe.path }}
+              port: {{ .Values.prefill.livenessProbe.port }}
+              scheme: HTTPS
+            initialDelaySeconds: {{ .Values.prefill.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.prefill.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.prefill.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.prefill.livenessProbe.failureThreshold }}
+          {{- end }}
+{{- end }}

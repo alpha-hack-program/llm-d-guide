@@ -1,0 +1,12 @@
+apiVersion: v2
+name: gpu-worker
+description: GPU worker MachineSet for OpenShift on AWS
+type: application
+version: 1.0.0
+appVersion: "1.0"
+keywords:
+  - openshift
+  - machineset
+  - gpu
+  - aws
+maintainers: []

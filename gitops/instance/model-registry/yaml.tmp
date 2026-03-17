@@ -1,0 +1,272 @@
+---
+# Source: model-registry/templates/model-registry-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: model-registry-dev-db
+  namespace: rhoai-model-registries
+  labels:
+    helm.sh/chart: model-registry-0.1.0
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/instance: model-registry-dev
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    template.openshift.io/expose-database_name: '{.data[''database-name'']}'
+    template.openshift.io/expose-password: '{.data[''database-password'']}'
+    template.openshift.io/expose-username: '{.data[''database-user'']}'
+data:
+  database-name: "bWV0YWRi"
+  database-password: "dGVzdA=="
+  database-user: "cm9vdA=="
+type: Opaque
+---
+# Source: model-registry/templates/mysql-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: model-registry-dev-db-secrets
+  namespace: rhoai-model-registries
+  labels:
+    helm.sh/chart: model-registry-0.1.0
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/instance: model-registry-dev
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  MYSQL_ROOT_PASSWORD: "dGVzdA=="
+  MYSQL_USER_NAME: "cm9vdA=="
+type: Opaque
+---
+# Source: model-registry/templates/model-registry-db-parameters.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-registry-dev-db-parameters
+  namespace: rhoai-model-registries
+  labels:
+    helm.sh/chart: model-registry-0.1.0
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/instance: model-registry-dev
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  MYSQL_ALLOW_EMPTY_PASSWORD: "true"
+  MYSQL_DATABASE: "metadb"
+  MYSQL_PORT: "3306"
+---
+# Source: model-registry/templates/mysql-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-registry-dev-metadata-mysql
+  namespace: rhoai-model-registries
+  labels:
+    helm.sh/chart: model-registry-0.1.0
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/instance: model-registry-dev
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: "10Gi"
+---
+# Source: model-registry/templates/rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: model-registry-dev
+  labels:
+    app: model-registry-dev
+    app.kubernetes.io/component: model-registry-dev
+    app.kubernetes.io/created-by: model-registry-dev-operator
+    app.kubernetes.io/part-of: model-registry-dev
+    component: model-registry-dev
+    helm.sh/chart: model-registry-0.1.0
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/instance: model-registry-dev
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    openshift.io/description: Can access Model Registry registry
+    openshift.io/display-name: Registry User registry
+rules:
+- apiGroups:
+  - ""
+  resourceNames:
+  - model-registry-dev
+  resources:
+  - services
+  verbs:
+  - get
+---
+# Source: model-registry/templates/rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: model-registry-dev-dashboard-permissions-everybody
+  labels:
+    app: registry
+    app.kubernetes.io/component: registry
+    app.kubernetes.io/part-of: registry
+    component: registry
+    opendatahub.io/dashboard: "true"
+    helm.sh/chart: model-registry-0.1.0
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/instance: model-registry-dev
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: model-registry-dev
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:authenticated
+  namespace: 'default'
+---
+# Source: model-registry/templates/mysql-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-registry-dev-db
+  namespace: rhoai-model-registries
+  labels:
+    component: db
+    helm.sh/chart: model-registry-0.1.0
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/instance: model-registry-dev
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    component: db
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/instance: model-registry-dev
+  ports:
+  - name: dbapi
+    port: 3306
+    protocol: TCP
+    targetPort: 3306
+---
+# Source: model-registry/templates/mysql-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-registry-dev-db
+  namespace: rhoai-model-registries
+  labels:
+    component: db
+    helm.sh/chart: model-registry-0.1.0
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/instance: model-registry-dev
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    type: "Recreate"
+  selector:
+    matchLabels:
+      component: db
+      app.kubernetes.io/name: model-registry
+      app.kubernetes.io/instance: model-registry-dev
+  template:
+    metadata:
+      labels:
+        component: db
+        app.kubernetes.io/name: model-registry
+        app.kubernetes.io/instance: model-registry-dev
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+      - args:
+          - --datadir
+          - /var/lib/mysql/datadir
+          - --default-authentication-plugin=mysql_native_password
+        env:
+        - name: KUBERNETES_CLUSTER_DOMAIN
+          value: "cluster.local"
+        envFrom:
+        - configMapRef:
+            name: model-registry-dev-db-parameters
+        - secretRef:
+            name: model-registry-dev-db-secrets
+        image: mysql:8.0.3
+        imagePullPolicy: IfNotPresent
+        name: db-container
+        ports:
+        - containerPort: 3306
+          name: dbapi
+          protocol: TCP
+        readinessProbe:
+          exec:
+            command:
+            - /bin/bash
+            - -c
+            - mysql -D $$MYSQL_DATABASE -u$$MYSQL_USER_NAME -p$$MYSQL_ROOT_PASSWORD -e 'SELECT
+              1'
+          failureThreshold: 3
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/lib/mysql
+          name: metadata-mysql
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: metadata-mysql
+        persistentVolumeClaim:
+          claimName: model-registry-dev-metadata-mysql
+---
+# Source: model-registry/templates/model-registry.yaml
+apiVersion: modelregistry.opendatahub.io/v1alpha1
+kind: ModelRegistry
+metadata:
+  name: model-registry-dev
+  namespace: rhoai-model-registries
+  labels:
+    helm.sh/chart: model-registry-0.1.0
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/instance: model-registry-dev
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    openshift.io/description: ""
+    openshift.io/display-name: model-registry-dev
+spec:
+  grpc:
+    port: 9090
+  rest:
+    port: 8080
+    serviceRoute: disabled
+  
+  oauthProxy:
+    port: 8443
+    routePort: 443
+    serviceRoute: enabled
+
+  mysql:
+    database: metadb
+    host: model-registry-dev-db.rhoai-model-registries.svc.cluster.local
+    passwordSecret:
+      key: database-password
+      name: model-registry-dev-db
+    port: 3306
+    skipDBCreation: false
+    username: root

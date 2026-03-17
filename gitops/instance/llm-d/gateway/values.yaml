@@ -1,0 +1,3 @@
+clusterDomain: "apps.example.com"
+gatewayNamespace: openshift-ingress
+tlsSecretName: ingress-certs

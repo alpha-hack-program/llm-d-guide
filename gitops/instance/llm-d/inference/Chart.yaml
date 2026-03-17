@@ -1,0 +1,4 @@
+apiVersion: v2
+description: LLMInferenceService resources for llm-d demo – supports intelligent-inference and pd-disaggregation deployment types
+name: inference
+version: 1.0.0

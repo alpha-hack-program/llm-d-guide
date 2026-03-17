@@ -1,0 +1,80 @@
+# -----------------------------------------------------------------------------
+# RHOAI Instance Helm Chart - Comprehensive values
+# Red Hat OpenShift AI: DSCInitialization, DataScienceCluster, OdhDashboardConfig,
+# HardwareProfile(s)
+# -----------------------------------------------------------------------------
+
+# Common ODH applications namespace (dashboard, hardware profiles, etc.)
+odhApplicationsNamespace: redhat-ods-applications
+
+# --- Feature toggles (drive component managementState and dashboard visibility) ---
+featureStore: false        # Feast operator
+modelsAsService: true      # KServe models-as-service
+distributedWorkloads: false # Kueue
+llamaStack: false          # LlamaStack operator
+modelRegistry: false       # Model registry + dashboard menu
+mlflow: false              # MLflow operator
+trustyai: false            # TrustyAI
+
+# --- DSCInitialization (dsci) ---
+# Only a few overrides; rest matches original defaults.
+dsci:
+  name: default-dsci
+  # applicationsNamespace defaults to odhApplicationsNamespace when set
+  monitoringNamespace: redhat-ods-monitoring
+  serviceMeshState: Removed  # or Managed if using service mesh
+
+# --- DataScienceCluster (dsc) ---
+# Only a few overrides; component states come from feature toggles above.
+dsc:
+  name: default-dsc
+  workbenchNamespace: rhods-notebooks      # optional
+  modelRegistryNamespace: rhoai-model-registries  # optional
+
+# --- OdhDashboardConfig ---
+# Only a few overrides; disableDistributedWorkloads/disableModelRegistry follow feature toggles above.
+odhDashboardConfig:
+  name: odh-dashboard-config
+  # namespace defaults to odhApplicationsNamespace
+  adminGroups: rhods-admins
+  allowedGroups: system:authenticated
+  notebookNamespace: rhods-notebooks
+  pvcSize: 20Gi
+
+# --- HardwareProfile(s) for workbenches / dashboard ---
+hardwareProfiles:
+  enabled: true
+  # namespace is odhApplicationsNamespace (common to all profiles)
+  profiles:
+    - name: gpu-profile
+      displayName: gpu-profile
+      description: "Provides a baseline hardware profile for GPU workloads with 1 GPU, 1 CPUs and 12Gi memory by default, adjustable up to 4 GPUs, 8 CPUs and 24Gi memory."
+      disabled: false
+      dashboardFeatureVisibility: "[]"
+      identifiers:
+        - defaultCount: "1"
+          displayName: CPU
+          identifier: cpu
+          maxCount: "8"
+          minCount: 1
+          resourceType: CPU
+        - defaultCount: 12Gi
+          displayName: Memory
+          identifier: memory
+          maxCount: 32Gi
+          minCount: 1Gi
+          resourceType: Memory
+        - defaultCount: 1
+          displayName: GPU
+          identifier: nvidia.com/gpu
+          maxCount: 4
+          minCount: 1
+          resourceType: Accelerator
+      scheduling:
+        type: Node
+        node:
+          nodeSelector: {}
+          tolerations:
+            - effect: NoSchedule
+              key: nvidia.com/gpu
+              operator: Exists

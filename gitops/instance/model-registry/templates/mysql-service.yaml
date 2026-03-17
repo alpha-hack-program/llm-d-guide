@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "model-registry.fullname" . }}-db
+  namespace: {{ .Values.registry.namespace }}
+  labels:
+    component: db
+  {{- include "model-registry.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.registryDb.type }}
+  selector:
+    component: db
+    {{- include "model-registry.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: dbapi
+    port: {{ .Values.registryDb.databasePort | default 3306 }}
+    protocol: TCP
+    targetPort: 3306

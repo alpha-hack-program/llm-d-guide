@@ -1,0 +1,13 @@
+apiVersion: dscinitialization.opendatahub.io/v1
+kind: DSCInitialization
+metadata:
+  name: {{ .Values.dsci.name | default "default-dsci" }}
+spec:
+  {{- if .Values.dsci.applicationsNamespace }}
+  applicationsNamespace: {{ .Values.dsci.applicationsNamespace }}
+  {{- end }}
+  monitoring:
+    managementState: Managed
+    namespace: {{ .Values.dsci.monitoringNamespace | default "redhat-ods-monitoring" }}
+  serviceMesh:
+    managementState: {{ .Values.dsci.serviceMeshState | default "Removed" }}

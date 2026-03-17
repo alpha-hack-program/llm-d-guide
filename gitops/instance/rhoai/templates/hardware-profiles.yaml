@@ -1,0 +1,24 @@
+{{- if .Values.hardwareProfiles.enabled }}
+{{- range .Values.hardwareProfiles.profiles }}
+---
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  annotations:
+    opendatahub.io/dashboard-feature-visibility: {{ .dashboardFeatureVisibility | default "[]" | quote }}
+    opendatahub.io/disabled: {{ (.disabled | default false) | quote }}
+    opendatahub.io/display-name: {{ .displayName | default .name | quote }}
+    opendatahub.io/description: {{ .description | quote }}
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+  name: {{ .name }}
+  namespace: {{ $.Values.odhApplicationsNamespace | default "redhat-ods-applications" }}
+spec:
+  identifiers:
+  {{- toYaml .identifiers | nindent 4 }}
+  scheduling:
+    node:
+      nodeSelector: {{ .scheduling.node.nodeSelector | default dict | toYaml }}
+      tolerations: {{ toYaml (.scheduling.node.tolerations | default list) | nindent 8 }}
+    type: {{ .scheduling.type | default "Node" }}
+{{- end }}
+{{- end }}

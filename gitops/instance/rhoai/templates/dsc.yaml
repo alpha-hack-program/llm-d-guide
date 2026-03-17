@@ -1,0 +1,49 @@
+---
+apiVersion: datasciencecluster.opendatahub.io/v2
+kind: DataScienceCluster
+metadata:
+  name: {{ .Values.dsc.name | default "default-dsc" }}
+  labels:
+    app.kubernetes.io/name: datasciencecluster
+    app.kubernetes.io/part-of: rhods-operator
+    app.kubernetes.io/managed-by: helm
+    app.kubernetes.io/created-by: rhods-operator
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  components:
+    dashboard:
+      managementState: Managed
+    aipipelines:
+      argoWorkflowsControllers:
+        managementState: Managed
+      managementState: Managed
+    feastoperator:
+      managementState: {{ if (.Values.featureStore | default false) }}Managed{{ else }}Removed{{ end }}
+    kserve:
+      managementState: Managed
+      modelsAsService:
+        managementState: {{ if (.Values.modelsAsService | default false) }}Managed{{ else }}Removed{{ end }}
+      nim:
+        managementState: Managed
+      rawDeploymentServiceConfig: Headless
+    kueue:
+      defaultClusterQueueName: default
+      defaultLocalQueueName: default
+      managementState: {{ if (.Values.distributedWorkloads | default false) }}Unmanaged{{ else }}Removed{{ end }}
+    llamastackoperator:
+      managementState: {{ if (.Values.llamaStack | default false) }}Managed{{ else }}Removed{{ end }}
+    modelregistry:
+      managementState: {{ if (.Values.modelRegistry | default false) }}Managed{{ else }}Removed{{ end }}
+      registriesNamespace: {{ .Values.dsc.modelRegistryNamespace | default "rhoai-model-registries" }}
+    mlflowoperator:
+      managementState: {{ if (.Values.mlflow | default false) }}Managed{{ else }}Removed{{ end }}
+    ray:
+      managementState: Managed
+    workbenches:
+      workbenchNamespace: {{ .Values.dsc.workbenchNamespace | default "rhods-notebooks" }}
+      managementState: Managed
+    trainingoperator:
+      managementState: Managed
+    trustyai:
+      managementState: {{ if (.Values.trustyai | default false) }}Managed{{ else }}Removed{{ end }}
