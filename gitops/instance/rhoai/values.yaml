@@ -8,13 +8,13 @@
 odhApplicationsNamespace: redhat-ods-applications
 
 # --- Feature toggles (drive component managementState and dashboard visibility) ---
-featureStore: false        # Feast operator
-modelsAsService: true      # KServe models-as-service
+featureStore: false         # Feast operator
+modelsAsService: false       # KServe models-as-service
 distributedWorkloads: false # Kueue
-llamaStack: false          # LlamaStack operator
-modelRegistry: false       # Model registry + dashboard menu
-mlflow: false              # MLflow operator
-trustyai: false            # TrustyAI
+llamaStack: true            # LlamaStack operator
+modelRegistry: true         # Model registry + dashboard menu
+mlflow: true                # MLflow operator
+trustyai: true              # TrustyAI
 
 # --- DSCInitialization (dsci) ---
 # Only a few overrides; rest matches original defaults.

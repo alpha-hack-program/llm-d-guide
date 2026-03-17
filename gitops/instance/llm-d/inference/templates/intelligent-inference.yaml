@@ -13,10 +13,20 @@ apiVersion: serving.kserve.io/v1alpha1
 kind: LLMInferenceService
 metadata:
   name: {{ .Values.serviceName }}
-  {{- if eq .Values.storage.type "oci" }}
   annotations:
+    opendatahub.io/model-type: generative
+    openshift.io/display-name: "{{ .Values.serviceName }}"
+    security.opendatahub.io/enable-auth: '{{ default false .Values.enableAuth }}'
+    opendatahub.io/hardware-profile-namespace: redhat-ods-applications
+    opendatahub.io/hardware-profile-name: gpu-profile
+  {{- if eq .Values.storage.type "oci" }}
     opendatahub.io/connections: {{ .Values.serviceName }}-connection
   {{- end }}
+  labels:
+    networking.kserve.io/visibility: exposed
+    opendatahub.io/dashboard: "true"
+    opendatahub.io/genai-asset: "true"
+    monitoring.opendatahub.io/scrape: "true"
 spec:
   replicas: {{ .Values.replicas }}
   model:
