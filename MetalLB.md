@@ -13,7 +13,9 @@ bashoc get nodes -l nvidia.com/gpu.present=true --show-labels
 
 Step 1.2 — Instantiate the MetalLB CR
 The MetalLB Operator is installed but you said no CR has been created yet. This is the instance that actually starts the controller and speaker pods:
-yaml# metallb-instance.yaml
+
+```yaml
+# metallb-instance.yaml
 apiVersion: metallb.io/v1beta1
 kind: MetalLB
 metadata:
@@ -26,8 +28,12 @@ spec:
     - key: "node-role.llm-d/inference"
       operator: "Exists"
       effect: "NoSchedule"
+```
+
 Apply and verify:
-bashoc apply -f metallb-instance.yaml
+
+```bash
+oc apply -f metallb-instance.yaml
 
 # Wait for controller and speakers to come up
 oc get pods -n metallb-system -w
@@ -35,3 +41,4 @@ oc get pods -n metallb-system -w
 # You should see:
 # controller-xxxx   1/1   Running
 # speaker-xxxx      1/1   Running   (one per baremetal node)
+```
