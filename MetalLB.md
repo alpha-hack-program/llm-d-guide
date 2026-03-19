@@ -42,3 +42,9 @@ oc get pods -n metallb-system -w
 # controller-xxxx   1/1   Running
 # speaker-xxxx      1/1   Running   (one per baremetal node)
 ```
+
+Get the default route and interface in a node:
+
+```bash
+ip route get $(getent hosts huggingface.co | awk '{print $1}' | head -1) | awk '{for(i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}'
+```
