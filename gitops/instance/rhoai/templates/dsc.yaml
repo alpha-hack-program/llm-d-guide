@@ -30,7 +30,7 @@ spec:
     kueue:
       defaultClusterQueueName: default
       defaultLocalQueueName: default
-      managementState: {{ if (.Values.distributedWorkloads | default false) }}Unmanaged{{ else }}Removed{{ end }}
+      managementState: {{ if (.Values.kueue | default false) }}Unmanaged{{ else }}Removed{{ end }}
     llamastackoperator:
       managementState: {{ if (.Values.llamaStack | default false) }}Managed{{ else }}Removed{{ end }}
     modelregistry:

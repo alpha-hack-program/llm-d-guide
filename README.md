@@ -323,11 +323,40 @@ oc get csv -n openshift-operators -w | grep -E "rhcl|authorino|limitador"
 # Wait for AuthPolicy CRD to be available
 oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
 
+# 5. Red Hat Build of Kueue (needed for workbenches...)
+oc apply -k gitops/operators/kueue-operator
+
 # 5. Red Hat OpenShift AI
 oc apply -k gitops/operators/rhoai
 oc get csv -n redhat-ods-operator -w
 
-# 6. Configure OpenShift AI (DSCInitialization and DataScienceCluster)
+# 6. Monitoring operators
+# 1) Cluster Observability Operator (optional; metrics / MonitoringStack)
+# oc apply -k gitops/operators/cluster-observability-operator
+# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-cluster-observability-operator -l operators.coreos.com/openshift-cluster-observability-operator.openshift-cluster-observability-operator= --timeout=300s
+
+# 2) Tempo Operator (distributed tracing)
+oc apply -k gitops/operators/tempo-operator
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-tempo-operator -l operators.coreos.com/tempo-product.openshift-tempo-operator= --timeout=300s
+
+# 3) OpenTelemetry Operator (collector for traces/metrics/logs)
+oc apply -k gitops/operators/opentelemetry-operator
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-opentelemetry-operator -l operators.coreos.com/opentelemetry-product.openshift-opentelemetry-operator= --timeout=300s
+# If you install Helm charts that use Instrumentation (e.g. llama-stack-demo), wait for the CRD:
+# oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
+
+# 4) Grafana Operator (optional; custom Grafana/dashboards)
+oc apply -k gitops/operators/grafana-operator
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
+
+# Optional: wait for all monitoring operators in one go (if you already applied them)
+# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-cluster-observability-operator -l operators.coreos.com/openshift-cluster-observability-operator.openshift-cluster-observability-operator= --timeout=300s
+# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-tempo-operator -l operators.coreos.com/tempo-product.openshift-tempo-operator= --timeout=300s
+# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-opentelemetry-operator -l operators.coreos.com/opentelemetry-product.openshift-opentelemetry-operator= --timeout=300s
+# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
+
+
+# 7. Configure OpenShift AI (DSCInitialization and DataScienceCluster)
 # Use helm template (not install): the chart emits resources in multiple namespaces
 helm template rhoai ./gitops/instance/rhoai | oc apply -f -
 

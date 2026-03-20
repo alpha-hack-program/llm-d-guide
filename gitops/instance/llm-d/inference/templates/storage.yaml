@@ -8,7 +8,11 @@ spec:
   accessModes:
     - {{ .Values.storage.pvc.accessMode | default "ReadWriteOnce" }}
   volumeMode: Filesystem
+  {{- if .Values.storage.pvc.storageClassName }}
+  storageClassName: {{ .Values.storage.pvc.storageClassName }}
+  {{- end }}
   resources:
     requests:
-      storage: {{ .Values.storage.pvc.size }}
+      storage: {{ .Values.storage.pvc.size | default "40Gi" }}
+      
 {{- end }}

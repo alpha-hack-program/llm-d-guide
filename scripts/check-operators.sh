@@ -25,3 +25,42 @@ oc get csv -A | grep -q "nfd" && echo "OK" || echo "MISSING"
 # Check NVIDIA GPU Operator
 echo -n "NVIDIA GPU Operator: "
 oc get csv -n nvidia-gpu-operator | grep -q "gpu-operator" && echo "OK" || echo "MISSING"
+
+echo ""
+echo "=== Monitoring operators (RHOAI 3.3) ==="
+
+# Check Cluster Observability Operator
+echo -n "Cluster Observability Operator: "
+if oc get subscription openshift-cluster-observability-operator -n openshift-cluster-observability-operator &>/dev/null; then
+  phase=$(oc get csv -n openshift-cluster-observability-operator -o jsonpath='{.items[*].status.phase}' 2>/dev/null)
+  case "$phase" in *Succeeded*) echo "OK";; *) echo "INSTALLING or FAILED (phase: $phase)";; esac
+else
+  echo "MISSING (Subscription not found)"
+fi
+
+# Check Tempo Operator
+echo -n "Tempo Operator: "
+if oc get subscription tempo-product -n openshift-tempo-operator &>/dev/null; then
+  phase=$(oc get csv -n openshift-tempo-operator -o jsonpath='{.items[*].status.phase}' 2>/dev/null)
+  case "$phase" in *Succeeded*) echo "OK";; *) echo "INSTALLING or FAILED (phase: $phase)";; esac
+else
+  echo "MISSING (Subscription not found)"
+fi
+
+# Check OpenTelemetry Operator
+echo -n "OpenTelemetry Operator: "
+if oc get subscription opentelemetry-product -n openshift-opentelemetry-operator &>/dev/null; then
+  phase=$(oc get csv -n openshift-opentelemetry-operator -o jsonpath='{.items[*].status.phase}' 2>/dev/null)
+  case "$phase" in *Succeeded*) echo "OK";; *) echo "INSTALLING or FAILED (phase: $phase)";; esac
+else
+  echo "MISSING (Subscription not found)"
+fi
+
+# Check Grafana Operator (optional)
+echo -n "Grafana Operator: "
+if oc get subscription grafana-operator -n grafana-operator &>/dev/null; then
+  phase=$(oc get csv -n grafana-operator -o jsonpath='{.items[*].status.phase}' 2>/dev/null)
+  case "$phase" in *Succeeded*) echo "OK";; *) echo "INSTALLING or FAILED (phase: $phase)";; esac
+else
+  echo "MISSING (optional)"
+fi

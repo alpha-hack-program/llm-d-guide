@@ -131,6 +131,8 @@ spec:
             nvidia.com/gpu: {{ .Values.resources.requests.gpuCount | quote }}
             {{- end }}
         {{- if and .Values.intelligentInferenceSimple .Values.useStartupProbe }}
+        strategy:
+          type: Recreate
         livenessProbe:
           initialDelaySeconds: 10
         startupProbe:

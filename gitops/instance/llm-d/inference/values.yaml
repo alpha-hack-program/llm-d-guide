@@ -48,6 +48,8 @@ model:
 
 # ── Resources (decode / main container) ──────────────────────────────────────
 
+gpuMemoryUtilization: 0.95
+maxModelLen: 2000
 resources:
   limits:
     cpu: "1"
