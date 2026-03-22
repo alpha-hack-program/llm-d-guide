@@ -45,6 +45,7 @@ spec:
     enablement: true
     genAiStudio: true
     modelAsService: true
+    mlflow: {{ if (.Values.mlflow | default false) }}true{{ else }}false{{ end }}
   groupsConfig:
     adminGroups: {{ .Values.odhDashboardConfig.adminGroups | default "rhods-admins" }}
     allowedGroups: {{ .Values.odhDashboardConfig.allowedGroups | default "system:authenticated" }}

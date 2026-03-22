@@ -4,21 +4,34 @@
 apiVersion: infrastructure.opendatahub.io/v1
 kind: HardwareProfile
 metadata:
+  labels:
+    app.kubernetes.io/part-of: hardwareprofile
+    app.opendatahub.io/hardwareprofile: 'true'
   annotations:
     opendatahub.io/dashboard-feature-visibility: {{ .dashboardFeatureVisibility | default "[]" | quote }}
     opendatahub.io/disabled: {{ (.disabled | default false) | quote }}
     opendatahub.io/display-name: {{ .displayName | default .name | quote }}
     opendatahub.io/description: {{ .description | quote }}
-    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
   name: {{ .name }}
   namespace: {{ $.Values.odhApplicationsNamespace | default "redhat-ods-applications" }}
 spec:
   identifiers:
   {{- toYaml .identifiers | nindent 4 }}
+  {{- if .scheduling }}
+  {{- $sched := .scheduling }}
   scheduling:
+  {{- if $sched.kueue }}
+    {{- $ks := $sched.kueue | default dict }}
+    kueue:
+      localQueueName: {{ $ks.localQueueName | default "default" | quote }}
+      priorityClass: {{ $ks.priorityClass | default "None" | quote }}
+    type: Queue
+  {{- else }}
+    {{- $node := $sched.node | default dict }}
     node:
-      nodeSelector: {{ .scheduling.node.nodeSelector | default dict | toYaml }}
-      tolerations: {{ toYaml (.scheduling.node.tolerations | default list) | nindent 8 }}
-    type: {{ .scheduling.type | default "Node" }}
+{{ toYaml $node | indent 6 }}
+    type: Node
+  {{- end }}
+  {{- end }}
 {{- end }}
 {{- end }}

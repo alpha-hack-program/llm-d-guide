@@ -45,6 +45,12 @@ odhDashboardConfig:
 # --- HardwareProfile(s) for workbenches / dashboard ---
 hardwareProfiles:
   enabled: true
+  # Per profile: scheduling is optional; if set, use scheduling.kueue (Queue) or scheduling.node (Node).
+  # Node example:
+  #   scheduling:
+  #     node:
+  #       nodeSelector: {}
+  #       tolerations: [{ effect: NoSchedule, key: nvidia.com/gpu, operator: Exists }]
   # namespace is odhApplicationsNamespace (common to all profiles)
   profiles:
     - name: gpu-profile
@@ -72,9 +78,38 @@ hardwareProfiles:
           minCount: 1
           resourceType: Accelerator
       scheduling:
-        type: Node
+        kueue:
+          localQueueName: default
+          priorityClass: "None"
+    - name: nvidiaa10g-profile
+      displayName: nvidia-a10g-profile
+      description: "Provides a hardware profile for A10G GPUs with 1 GPU, 1 CPUs and 12Gi memory by default, adjustable up to 4 GPUs, 8 CPUs and 24Gi memory."
+      disabled: false
+      dashboardFeatureVisibility: "[]"
+      identifiers:
+        - defaultCount: "1"
+          displayName: CPU
+          identifier: cpu
+          maxCount: "8"
+          minCount: 1
+          resourceType: CPU
+        - defaultCount: 12Gi
+          displayName: Memory
+          identifier: memory
+          maxCount: 32Gi
+          minCount: 1Gi
+          resourceType: Memory
+        - defaultCount: 1
+          displayName: GPU
+          identifier: nvidia.com/gpu
+          maxCount: 4
+          minCount: 1
+          resourceType: Accelerator
+      scheduling:
         node:
-          nodeSelector: {}
+          # by product name
+          nodeSelector:
+            nvidia.com/gpu.product: NVIDIA-A10G
           tolerations:
             - effect: NoSchedule
               key: nvidia.com/gpu
