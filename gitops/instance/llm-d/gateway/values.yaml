@@ -1,3 +1,22 @@
+subdomain: "inference"
 clusterDomain: "apps.example.com"
+
 gatewayNamespace: openshift-ingress
 tlsSecretName: ingress-certs
+gatewayName: openshift-ai-inference
+
+useOpenShiftRoute: false
+
+tls:
+  # Name of the TLS secret for the Gateway listener.
+  # Set to "" to use plain HTTP instead.
+  secretName: "openshift-ai-inference-tls"
+  # If true, creates a self-signed cert-manager Issuer + Certificate
+  # that generates the secret automatically.
+  # If false, the secret must already exist (e.g. created by the OpenShift
+  # service CA annotation or provided externally).
+  generate: false
+  # Name of the cert-manager Issuer to use.
+  # Set to "selfsigned" to create a self-signed Issuer + Certificate.
+  # Set to "letsencrypt" to use the letsencrypt ClusterIssuer.
+  issuerName: "selfsigned"

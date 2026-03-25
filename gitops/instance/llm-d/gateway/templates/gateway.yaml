@@ -1,27 +1,81 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
-  name: openshift-default
+  name: {{ .Values.gatewayName }}-class
 spec:
   controllerName: openshift.io/gateway-controller/v1
+# If using OpenShift Route, create a ConfigMap to set the serving cert secret name.
+{{- if .Values.useOpenShiftRoute }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.gatewayName }}-override-config
+  namespace: {{ .Values.gatewayNamespace }}
+data:
+  service: |
+    metadata:
+      annotations:
+        service.beta.openshift.io/serving-cert-secret-name: "{{ .Values.tls.secretName }}"
+    spec:
+      type: ClusterIP
+{{- end }}
+{{- if and .Values.tls.secretName .Values.tls.generate }}
+---
+{{- if eq .Values.tls.issuerName "selfsigned"}}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.gatewayName }}-selfsigned-issuer
+  namespace: {{ .Values.gatewayNamespace }}
+spec:
+  selfSigned: {}
+{{- end }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.gatewayName }}-serving-cert
+  namespace: {{ .Values.gatewayNamespace }}
+spec:
+  dnsNames:
+  - {{ .Values.gatewayName }}-{{ .Values.gatewayName }}-class.{{ .Values.gatewayNamespace }}.svc
+  - {{ .Values.gatewayName }}-{{ .Values.gatewayName }}-class.{{ .Values.gatewayNamespace }}.svc.cluster.local
+  - {{ .Values.gatewayName }}-{{ .Values.gatewayNamespace }}.{{ .Values.clusterDomain }}
+  issuerRef:
+  {{- if eq .Values.tls.issuerName "selfsigned"}}
+    kind: Issuer
+    name: {{ .Values.gatewayName }}-selfsigned-issuer
+  {{- else }}
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: letsencrypt
+  {{- end }}
+  secretName: {{ .Values.tls.secretName }}
+{{- end }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: openshift-ai-inference
+  name: {{ .Values.gatewayName }}
   namespace: {{ .Values.gatewayNamespace }}
 spec:
-  gatewayClassName: openshift-default
+  gatewayClassName: {{ .Values.gatewayName }}-class
+  {{- if .Values.useOpenShiftRoute }}
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: {{ .Values.gatewayName }}-override-config
+  {{- end }}
   listeners:
-  - name: http
-    hostname: "inference.{{ .Values.clusterDomain }}"
-    port: 80
-    protocol: HTTP
-    allowedRoutes:
-      namespaces:
-        from: All
+  {{- if .Values.tls.secretName }}
   - name: https
-    hostname: "inference.{{ .Values.clusterDomain }}"
+    {{- if .Values.useOpenShiftRoute }}
+    hostname: "{{ .Values.gatewayName }}-{{ .Values.gatewayNamespace }}.{{ .Values.clusterDomain }}"
+    {{- else }}
+    hostname: "{{ .Values.subdomain }}.{{ .Values.clusterDomain }}"
+    {{- end }}
     port: 443
     protocol: HTTPS
     allowedRoutes:
@@ -30,5 +84,40 @@ spec:
     tls:
       mode: Terminate
       certificateRefs:
-      - name: {{ .Values.tlsSecretName }}
+      - name: {{ .Values.tls.secretName }}
         kind: Secret
+  {{- else }}
+  - name: http
+    {{- if .Values.useOpenShiftRoute }}
+    hostname: "{{ .Values.gatewayName }}-{{ .Values.gatewayNamespace }}.{{ .Values.clusterDomain }}"
+    {{- else }}
+    hostname: "{{ .Values.subdomain }}.{{ .Values.clusterDomain }}"
+    {{- end }}
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: All
+  {{- end }}
+---
+{{- if .Values.useOpenShiftRoute }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Values.gatewayName }}
+  namespace: {{ .Values.gatewayNamespace }}
+spec:
+  to:
+    kind: Service
+    name: {{ .Values.gatewayName }}-{{ .Values.gatewayName }}-class
+    weight: 100
+  port:
+    targetPort: {{ if .Values.tls.secretName }}https{{ else }}http{{ end }}
+  tls:
+    {{- if .Values.tls.secretName }}
+    termination: passthrough
+    {{- else }}
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+    {{- end }}
+{{- end }}
