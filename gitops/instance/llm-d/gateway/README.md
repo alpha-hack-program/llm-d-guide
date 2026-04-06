@@ -1,3 +1,114 @@
+# Deployment of a k8s Gateway based on OpenShift Connectivity Link for llm-d
+
+This helm chart deploys all the elements needed for ingress traffic using Kubernetes Gateway API.
+
+## Example Deployments
+
+### Uisng load balancer with pre-existing certificate
+
+```bash
+APP_NAME=gateway
+GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
+helm template gitops/instance/llm-d/gateway \
+  --name-template ${APP_NAME} \
+  --set gatewayName="${GATEWAY_NAME}" \
+  --set clusterDomain="${CLUSTER_DOMAIN}" \
+  --set subdomain=inference \
+  --set useOpenShiftRoute=false \
+  --set tls.secretName=ingress-certs --include-crds > gw-lb-certificate.tmp.yaml
+```
+### Using load balancer and generating a self-signed certificate:
+
+```bash
+APP_NAME=gateway
+GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
+helm template gitops/instance/llm-d/gateway \
+  --name-template ${APP_NAME} \
+  --set gatewayName="${GATEWAY_NAME}" \
+  --set clusterDomain="${CLUSTER_DOMAIN}" \
+  --set subdomain=inference \
+  --set useOpenShiftRoute=false \
+  --set tls.secretName="${GATEWAY_NAME}" \
+  --set tls.generate=true --include-crds > gw-lb-selfsigned.tmp.yaml
+```
+
+### Using load balancer and generating a letsencrypt certificate:
+
+```bash
+APP_NAME=gateway
+GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
+helm template gitops/instance/llm-d/gateway \
+  --name-template ${APP_NAME} \
+  --set gatewayName="${GATEWAY_NAME}" \
+  --set clusterDomain="${CLUSTER_DOMAIN}" \
+  --set subdomain=inference \
+  --set useOpenShiftRoute=false \
+  --set tls.secretName="${GATEWAY_NAME}" \
+  --set tls.generate=true \
+  --set tls.issuerName=letsencrypt --include-crds > gw-lb-letsencrypt.tmp.yaml
+```
+
+### Uisng OpenShift router with pre-existing certificate
+
+```bash
+APP_NAME=gateway
+GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
+helm template gitops/instance/llm-d/gateway \
+  --name-template ${APP_NAME} \
+  --set gatewayName="${GATEWAY_NAME}" \
+  --set clusterDomain="${CLUSTER_DOMAIN}" \
+  --set subdomain=inference \
+  --set useOpenShiftRoute=true \
+  --set tls.secretName=ingress-certs --include-crds > gw-ocp-route-certificate.tmp.yaml
+```
+
+### Using OpenShift router and generating a self-signed certificate:
+
+```bash
+APP_NAME=gateway
+GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
+helm template gitops/instance/llm-d/gateway \
+  --name-template ${APP_NAME} \
+  --set gatewayName="${GATEWAY_NAME}" \
+  --set clusterDomain="${CLUSTER_DOMAIN}" \
+  --set subdomain=inference \
+  --set useOpenShiftRoute=true \
+  --set tls.secretName="${GATEWAY_NAME}" \
+  --set tls.generate=true --include-crds > gw-ocp-route-selfsigned.tmp.yaml
+```
+
+### Using OpenShift router and generating a letsencrypt certificate:
+
+```bash
+APP_NAME=gateway
+GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
+helm template gitops/instance/llm-d/gateway \
+  --name-template ${APP_NAME} \
+  --set gatewayName="${GATEWAY_NAME}" \
+  --set clusterDomain="${CLUSTER_DOMAIN}" \
+  --set subdomain=inference \
+  --set useOpenShiftRoute=true \
+  --set tls.secretName="${GATEWAY_NAME}" \
+  --set tls.generate=true \
+  --set tls.issuerName=letsencrypt --include-crds > gw-ocp-route-letsencrypt.tmp.yaml
+```
+
+Then use `oc apply -f <filename>`
+
+## Gateway tests with some NGINX services
+
 Test it:
 
 On OpenShift, pods run as an arbitrary non-root UID. The stock `nginx` image expects root and fails with `Permission denied` under `/var/cache/nginx`. Use an unprivileged image (it listens on **8080**). Do not rely on `oc exec` to edit `/usr/share/nginx/html`: that path is typically root-owned in the image while your process runs as a random UID, so writes fail with **Permission denied**. Mount a **ConfigMap** for `index.html` instead.
@@ -31,7 +142,6 @@ oc rollout status deployment/nginx-b -n "${PROJECT}" --timeout=120s
 Routes:
 
 ```sh
-GATEWAY="llm-d"
 oc apply -n ${PROJECT} -f - <<EOF
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -43,7 +153,7 @@ spec:
   parentRefs:
     - group: gateway.networking.k8s.io
       kind: Gateway
-      name: ${GATEWAY}
+      name: ${GATEWAY_NAME}
       namespace: openshift-ingress
   hostnames:
   # - "apps.example.com"
@@ -71,7 +181,7 @@ spec:
   parentRefs:
     - group: gateway.networking.k8s.io
       kind: Gateway
-      name: ${GATEWAY}
+      name: ${GATEWAY_NAME}
       namespace: openshift-ingress
   hostnames:
   # - "apps.example.com"
@@ -90,45 +200,6 @@ spec:
     - name: nginx-b
       port: 8080
 EOF
-```
-
-### Examples
-
-#### llm-d openshift-ai-inference 
-
-Uisng OpenShift router with pre-existing certificate:
-
-```bash
-APP_NAME=gateway
-GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
-CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
-helm template gitops/instance/llm-d/gateway \
-  --name-template ${APP_NAME} \
-  --set gatewayName="${GATEWAY_NAME}" \
-  --set useOpenShiftRoute=false \
-  --set clusterDomain="${CLUSTER_DOMAIN}" \
-  --set subdomain=inference \
-  --set useOpenShiftRoute=true \
-  --set tls.secretName=ingress-certs --include-crds > gw-ocp-route-certificate.tmp.yaml
-```
-
-Uisng OpenShift router and generating a self-signed certificate:
-
-```bash
-APP_NAME=gateway
-GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
-CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
-helm template gitops/instance/llm-d/gateway \
-  --name-template ${APP_NAME} \
-  --set gatewayName="${GATEWAY_NAME}" \
-  --set useOpenShiftRoute=false \
-  --set clusterDomain="${CLUSTER_DOMAIN}" \
-  --set subdomain=inference \
-  --set useOpenShiftRoute=true \
-  --set tls.secretName="${GATEWAY_NAME}" \
-  --set tls.generate=true --include-crds > gw-ocp-route-selfsigned.tmp.yaml
 ```
 
 ### Troubleshooting HTTPRoutes (`route-a` / `route-b`)

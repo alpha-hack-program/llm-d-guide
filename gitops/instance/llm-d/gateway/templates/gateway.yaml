@@ -39,17 +39,24 @@ metadata:
   namespace: {{ .Values.gatewayNamespace }}
 spec:
   dnsNames:
+  {{- if eq .Values.tls.issuerName "selfsigned" }}
   - {{ .Values.gatewayName }}-{{ .Values.gatewayName }}-class.{{ .Values.gatewayNamespace }}.svc
   - {{ .Values.gatewayName }}-{{ .Values.gatewayName }}-class.{{ .Values.gatewayNamespace }}.svc.cluster.local
+  {{- else }}
   - {{ .Values.gatewayName }}-{{ .Values.gatewayNamespace }}.{{ .Values.clusterDomain }}
+  {{- end }}
   issuerRef:
   {{- if eq .Values.tls.issuerName "selfsigned"}}
+    group: cert-manager.io
     kind: Issuer
     name: {{ .Values.gatewayName }}-selfsigned-issuer
-  {{- else }}
+  {{- else if eq .Values.tls.issuerName "letsencrypt" }}
     group: cert-manager.io
     kind: ClusterIssuer
     name: letsencrypt
+  {{- else }}
+    kind: Issuer
+    name: {{ .Values.tls.issuerName }}
   {{- end }}
   secretName: {{ .Values.tls.secretName }}
 {{- end }}
