@@ -109,14 +109,21 @@ ArgoCD is needed ...
 
 Installation process:
 
+Go to `Ecosystem/Catalog` and look for **gitops**, then click on `Red Hat OpenShift Gitops`.
 
-Screen shots <== TODO
+![ArgoCD installation screenshots](images/gitops-install-1.png)
 
-Approve in the next screen.
+Leave the defaults and click on **Install**.
 
-### 3.0 Certificates using Let's Encrypt
+![ArgoCD installation screenshots](images/gitops-install-2.png)
 
-Install Cert Manager Operator:
+Leave the defaults as in the screenshot and click on **Install**.
+
+![ArgoCD installation screenshots](images/gitops-install-3.png)
+
+### 3.1 Cert Manager Operator and Let's Encrypt Certificate Issuer
+
+#### Installing the operator
 
 ```sh
 cat <<EOF | oc apply -f -
@@ -142,7 +149,7 @@ spec:
 EOF
 ```
 
-# RBAC Permissions for cert-manager and supporting components:
+#### RBAC Permissions for cert-manager and supporting components:
 
 - Allow cert-manager to create and manage Certificates, Certificaterequests, Orders, Challenges, ClusterIssuers, and Issuers (apiGroup: cert-manager.io)
 - Allow access to cloudcredential.openshift.io CredentialsRequests for integration with OpenShift cloud-credential-operator (required for some managed certificate use cases)
@@ -214,7 +221,9 @@ subjects:
 EOF
 ```
 
-Install 
+#### Installing Let's Ecnrypt Cluster Issuers and installing Certificates for OpenShift Ingress and API Server
+
+Install:
 
 ```sh
 # 0) Check if logged in with oc
@@ -285,101 +294,7 @@ Check the status of the certs:
 oc get certificates.cert-manager.io --all-namespaces -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,STATUS:.status.conditions[0].type,READY:.status.conditions[0].status'
 ```
 
-
-### 3.1 Core Dependencies (All Installations)
-
-| Operator | Channel | Purpose | Required For |
-|---|---|---|---|
-| Red Hat OpenShift Serverless | `stable` | Knative Serving for KServe advanced deployment | KServe |
-| Red Hat — Authorino Operator | `managed-services` | Token auth for single-model serving endpoints | KServe |
-| cert-manager Operator for Red Hat OpenShift | `stable-v1` | Automated TLS certificate lifecycle | Recommended (see above) |
-
-> **Note on Service Mesh:** Do **not** install OpenShift Service Mesh v2 if you plan to use llm-d, as the included CRDs conflict with the llm-d gateway component. Service Mesh 3.x is required for Llama Stack but is not supported for model serving. RHOAI will configure Service Mesh automatically when needed via the DSC.
-
-
-```sh
-# 1. Cert Manager <== TODO this is done with Alvaro's repo
-# oc apply -k llm-d-playbook/gitops/operators/cert-manager
-# oc wait --for=condition=ready pod -l app.kubernetes.io/name=cert-manager -n cert-manager --timeout=300s
-
-# 2. MetalLB (bare metal only - skip for cloud)
-# oc apply -k llm-d-playbook/gitops/operators/metallb-operator
-# oc wait --for=condition=ready pod -l control-plane=controller-manager -n metallb-system --timeout=300s
-
-# 3. Service Mesh 3
-oc apply -k ./gitops/operators/servicemeshoperator3/operator/overlays/stable
-# Wait for operator to install (check CSV status)
-oc get csv -n openshift-operators -w
-
-# 4. Connectivity Link (required for RHOAI 3.0+)
-oc apply -k ./gitops/operators/connectivity-link
-# Note: InstallPlan may require manual approval due to dependencies
-# Check and approve if needed:
-oc get installplan -n openshift-operators | grep -i "requiresapproval"
-# If an InstallPlan is pending, approve it:
-# oc patch installplan <name> -n openshift-operators --type merge -p '{"spec":{"approved":true}}'
-# Wait for operators to install
-oc get csv -n openshift-operators -w | grep -E "rhcl|authorino|limitador"
-# Wait for AuthPolicy CRD to be available
-oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
-
-# 5. Red Hat Build of Kueue (needed for workbenches...)
-oc apply -k gitops/operators/kueue-operator
-
-# 5. Red Hat OpenShift AI
-oc apply -k gitops/operators/rhoai
-oc get csv -n redhat-ods-operator -w
-
-# 6. Monitoring operators
-# 1) Cluster Observability Operator (optional; metrics / MonitoringStack)
-# oc apply -k gitops/operators/cluster-observability-operator
-# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-cluster-observability-operator -l operators.coreos.com/openshift-cluster-observability-operator.openshift-cluster-observability-operator= --timeout=300s
-
-# 2) Tempo Operator (distributed tracing)
-oc apply -k gitops/operators/tempo-operator
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-tempo-operator -l operators.coreos.com/tempo-product.openshift-tempo-operator= --timeout=300s
-
-# 3) OpenTelemetry Operator (collector for traces/metrics/logs)
-oc apply -k gitops/operators/opentelemetry-operator
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-opentelemetry-operator -l operators.coreos.com/opentelemetry-product.openshift-opentelemetry-operator= --timeout=300s
-# If you install Helm charts that use Instrumentation (e.g. llama-stack-demo), wait for the CRD:
-# oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
-
-# 4) Grafana Operator (optional; custom Grafana/dashboards)
-oc apply -k gitops/operators/grafana-operator
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
-
-# Optional: wait for all monitoring operators in one go (if you already applied them)
-# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-cluster-observability-operator -l operators.coreos.com/openshift-cluster-observability-operator.openshift-cluster-observability-operator= --timeout=300s
-# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-tempo-operator -l operators.coreos.com/tempo-product.openshift-tempo-operator= --timeout=300s
-# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-opentelemetry-operator -l operators.coreos.com/opentelemetry-product.openshift-opentelemetry-operator= --timeout=300s
-# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
-
-
-# 7. Configure OpenShift AI (DSCInitialization and DataScienceCluster)
-# Use helm template (not install): the chart emits resources in multiple namespaces
-helm template rhoai ./gitops/instance/rhoai | oc apply -f -
-
-# Wait for LLMInferenceService CRD to be created
-oc wait --for=condition=Established crd/llminferenceservices.serving.kserve.io --timeout=300s
-# Wait for controller pods to be ready (required for webhook validation)
-oc wait --for=condition=ready pod -l control-plane=odh-model-controller -n redhat-ods-applications --timeout=300s
-oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager -n redhat-ods-applications --timeout=300s
-```
-
-### 3.2 Pipeline Dependencies
-
-| Operator | Channel | Purpose |
-|---|---|---|
-| Red Hat OpenShift Pipelines | `latest` | Tekton pipelines for data science workflows |
-
-
-```sh
-# Install pipelines
-oc apply -k gitops/operators/pipelines
-```
-
-### 3.3 GPU and Hardware Dependencies
+### 3.2 GPU and Hardware Dependencies
 
 | Operator | Channel | Purpose |
 |---|---|---|
@@ -430,20 +345,7 @@ oc apply -k gitops/instance/nvidia
 
 See: [NVIDIA GPU Operator on Red Hat OpenShift Container Platform](https://docs.nvidia.com/datacenter/cloud-native/openshift/latest/index.html)
 
-### 3.4 Leader Worker Set Operator
-
-```sh
-# 9. Leader Worker Set
-oc apply -k ./gitops/operators/leader-worker-set
-```
-
-#### 3.5 Check Operators
-
-```sh
-llm-d-playbook/scripts/check-operators.sh
-```
-
-# Adding GPUs in AWS
+#### Adding A10G GPUs in AWS with MachineSets
 
 ```sh
 export INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
@@ -460,8 +362,111 @@ for AZ in a b c; do
     --set devicePluginConfig="" \
     --set az=${AZ} | oc apply -f -
 done
-
 ```
+
+### 3.3 Core Dependencies (All Installations)
+
+| Operator | Channel | Purpose | Required For |
+|---|---|---|---|
+| Red Hat OpenShift Serverless | `stable` | Knative Serving for KServe advanced deployment | KServe |
+| Red Hat — Authorino Operator | `managed-services` | Token auth for single-model serving endpoints | KServe |
+| cert-manager Operator for Red Hat OpenShift | `stable-v1` | Automated TLS certificate lifecycle | Recommended (see above) |
+
+> **Note on Service Mesh:** Do **not** install OpenShift Service Mesh v2 if you plan to use llm-d, as the included CRDs conflict with the llm-d gateway component. Service Mesh 3.x is required for Llama Stack but is not supported for model serving. RHOAI will configure Service Mesh automatically when needed via the DSC.
+
+
+```sh
+# 1. Cert Manager <== TODO this is done with Alvaro's repo
+# oc apply -k llm-d-playbook/gitops/operators/cert-manager
+# oc wait --for=condition=ready pod -l app.kubernetes.io/name=cert-manager -n cert-manager --timeout=300s
+
+# 2. MetalLB (bare metal only - skip for cloud)
+# oc apply -k llm-d-playbook/gitops/operators/metallb-operator
+# oc wait --for=condition=ready pod -l control-plane=controller-manager -n metallb-system --timeout=300s
+
+# 3. Service Mesh 3
+oc apply -k ./gitops/operators/servicemeshoperator3/operator/overlays/stable
+# Wait for operator to install (check CSV status)
+oc get csv -n openshift-operators -w
+
+# 4. Connectivity Link (required for RHOAI 3.0+)
+oc apply -k ./gitops/operators/connectivity-link
+# Note: InstallPlan may require manual approval due to dependencies
+# Check and approve if needed:
+oc get installplan -n openshift-operators | grep -i "requiresapproval"
+# If an InstallPlan is pending, approve it:
+# oc patch installplan <name> -n openshift-operators --type merge -p '{"spec":{"approved":true}}'
+# Wait for operators to install
+oc get csv -n openshift-operators -w | grep -E "rhcl|authorino|limitador"
+# Wait for AuthPolicy CRD to be available
+oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
+
+# 5. Red Hat Build of Kueue (needed for workbenches...)
+oc apply -k gitops/operators/kueue-operator
+
+# 6. Red Hat OpenShift AI
+oc apply -k gitops/operators/rhoai
+oc get csv -n redhat-ods-operator -w
+
+# 7. Monitoring operators
+# 1) Cluster Observability Operator (optional; metrics / MonitoringStack)
+# oc apply -k gitops/operators/cluster-observability-operator
+# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-cluster-observability-operator -l operators.coreos.com/openshift-cluster-observability-operator.openshift-cluster-observability-operator= --timeout=300s
+
+# 2) Tempo Operator (distributed tracing)
+oc apply -k gitops/operators/tempo-operator
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-tempo-operator -l operators.coreos.com/tempo-product.openshift-tempo-operator= --timeout=300s
+
+# 3) OpenTelemetry Operator (collector for traces/metrics/logs)
+oc apply -k gitops/operators/opentelemetry-operator
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-opentelemetry-operator -l operators.coreos.com/opentelemetry-product.openshift-opentelemetry-operator= --timeout=300s
+# If you install Helm charts that use Instrumentation (e.g. llama-stack-demo), wait for the CRD:
+# oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
+
+# 4) Grafana Operator (optional; custom Grafana/dashboards)
+oc apply -k gitops/operators/grafana-operator
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
+
+# Optional: wait for all monitoring operators in one go (if you already applied them)
+# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-cluster-observability-operator -l operators.coreos.com/openshift-cluster-observability-operator.openshift-cluster-observability-operator= --timeout=300s
+# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-tempo-operator -l operators.coreos.com/tempo-product.openshift-tempo-operator= --timeout=300s
+# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-opentelemetry-operator -l operators.coreos.com/opentelemetry-product.openshift-opentelemetry-operator= --timeout=300s
+# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
+
+# 8. Leader Worker Set
+oc apply -k ./gitops/operators/leader-worker-set
+
+# 9. Configure OpenShift AI (DSCInitialization and DataScienceCluster)
+# Use helm template (not install): the chart emits resources in multiple namespaces
+helm template rhoai ./gitops/instance/rhoai | oc apply -f -
+
+# Wait for LLMInferenceService CRD to be created
+oc wait --for=condition=Established crd/llminferenceservices.serving.kserve.io --timeout=300s
+# Wait for controller pods to be ready (required for webhook validation)
+oc wait --for=condition=ready pod -l control-plane=odh-model-controller -n redhat-ods-applications --timeout=300s
+oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager -n redhat-ods-applications --timeout=300s
+```
+
+### 3.2 Pipeline Dependencies
+
+| Operator | Channel | Purpose |
+|---|---|---|
+| Red Hat OpenShift Pipelines | `latest` | Tekton pipelines for data science workflows |
+
+
+```sh
+# Install pipelines
+oc apply -k gitops/operators/pipelines
+```
+
+
+### 3.5 Check Operators
+
+```sh
+llm-d-playbook/scripts/check-operators.sh
+```
+
+
 
 # Quick Start Guide to Deploy llm-d
 

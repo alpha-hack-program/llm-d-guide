@@ -1,11 +1,4 @@
-apiVersion: gateway.networking.k8s.io/v1
-kind: GatewayClass
-metadata:
-  name: {{ .Values.gatewayName }}-class
-spec:
-  controllerName: openshift.io/gateway-controller/v1
-# If using OpenShift Route, create a ConfigMap to set the serving cert secret name.
-{{- if .Values.useOpenShiftRoute }}
+{{- if and .Values.useOpenShiftRoute (not (and .Values.tls.secretName .Values.tls.generate)) }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -22,7 +15,7 @@ data:
 {{- end }}
 {{- if and .Values.tls.secretName .Values.tls.generate }}
 ---
-{{- if eq .Values.tls.issuerName "selfsigned"}}
+{{- if eq .Values.tls.issuerName "selfsigned" }}
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
@@ -30,8 +23,8 @@ metadata:
   namespace: {{ .Values.gatewayNamespace }}
 spec:
   selfSigned: {}
-{{- end }}
 ---
+{{- end }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -42,11 +35,14 @@ spec:
   {{- if eq .Values.tls.issuerName "selfsigned" }}
   - {{ .Values.gatewayName }}-{{ .Values.gatewayName }}-class.{{ .Values.gatewayNamespace }}.svc
   - {{ .Values.gatewayName }}-{{ .Values.gatewayName }}-class.{{ .Values.gatewayNamespace }}.svc.cluster.local
-  {{- else }}
+  {{- end }}
+  {{- if .Values.useOpenShiftRoute }}
   - {{ .Values.gatewayName }}-{{ .Values.gatewayNamespace }}.{{ .Values.clusterDomain }}
+  {{- else }}
+  - {{ .Values.subdomain }}.{{ .Values.clusterDomain }}
   {{- end }}
   issuerRef:
-  {{- if eq .Values.tls.issuerName "selfsigned"}}
+  {{- if eq .Values.tls.issuerName "selfsigned" }}
     group: cert-manager.io
     kind: Issuer
     name: {{ .Values.gatewayName }}-selfsigned-issuer
@@ -62,13 +58,20 @@ spec:
 {{- end }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Values.gatewayName }}-class
+spec:
+  controllerName: openshift.io/gateway-controller/v1
+---
+apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: {{ .Values.gatewayName }}
   namespace: {{ .Values.gatewayNamespace }}
 spec:
   gatewayClassName: {{ .Values.gatewayName }}-class
-  {{- if .Values.useOpenShiftRoute }}
+  {{- if and .Values.useOpenShiftRoute (not (and .Values.tls.secretName .Values.tls.generate)) }}
   infrastructure:
     parametersRef:
       group: ""
@@ -106,14 +109,15 @@ spec:
       namespaces:
         from: All
   {{- end }}
----
 {{- if .Values.useOpenShiftRoute }}
+---
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: {{ .Values.gatewayName }}
   namespace: {{ .Values.gatewayNamespace }}
 spec:
+  host: "{{ .Values.gatewayName }}-{{ .Values.gatewayNamespace }}.{{ .Values.clusterDomain }}"
   to:
     kind: Service
     name: {{ .Values.gatewayName }}-{{ .Values.gatewayName }}-class
@@ -123,8 +127,10 @@ spec:
   tls:
     {{- if .Values.tls.secretName }}
     termination: passthrough
+    insecureEdgeTerminationPolicy: Redirect
     {{- else }}
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
     {{- end }}
+  wildcardPolicy: None
 {{- end }}

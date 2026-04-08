@@ -89,6 +89,8 @@ helm template gitops/instance/llm-d/gateway \
 
 ### Using OpenShift router and generating a letsencrypt certificate:
 
+This will generate a DNS entry.
+
 ```bash
 APP_NAME=gateway
 GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
