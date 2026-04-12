@@ -105,11 +105,9 @@ RHOAI 3.3 requires several operators installed **before** creating the DataScien
 
 ### 3.0 ArgoCD
 
-ArgoCD is needed ... 
-
 Installation process:
 
-Go to `Ecosystem/Catalog` and look for **gitops**, then click on `Red Hat OpenShift Gitops`.
+Go to `Ecosystem/Software Catalog` and look for **gitops**, then click on `Red Hat OpenShift Gitops`.
 
 ![ArgoCD installation screenshots](images/gitops-install-1.png)
 
@@ -122,32 +120,6 @@ Leave the defaults as in the screenshot and click on **Install**.
 ![ArgoCD installation screenshots](images/gitops-install-3.png)
 
 ### 3.1 Cert Manager Operator and Let's Encrypt Certificate Issuer
-
-#### Installing the operator
-
-```sh
-cat <<EOF | oc apply -f -
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  labels:
-    app: cert-manager-operator
-  name: cert-manager-operator
-  namespace: openshift-gitops
-spec:
-  destination:
-    server: 'https://kubernetes.default.svc'
-  project: default
-  source:
-    path: 02-cert-manager-operator
-    repoURL: https://github.com/alvarolop/ocp-secured-integration.git
-    targetRevision: main
-  syncPolicy:
-    automated:
-      prune: false
-      selfHeal: false
-EOF
-```
 
 #### RBAC Permissions for cert-manager and supporting components:
 
@@ -221,6 +193,32 @@ subjects:
 EOF
 ```
 
+#### Installing the operator
+
+```sh
+cat <<EOF | oc apply -f -
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  labels:
+    app: cert-manager-operator
+  name: cert-manager-operator
+  namespace: openshift-gitops
+spec:
+  destination:
+    server: 'https://kubernetes.default.svc'
+  project: default
+  source:
+    path: 02-cert-manager-operator
+    repoURL: https://github.com/alvarolop/ocp-secured-integration.git
+    targetRevision: main
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+EOF
+```
+
 #### Installing Let's Ecnrypt Cluster Issuers and installing Certificates for OpenShift Ingress and API Server
 
 Install:
@@ -238,23 +236,26 @@ while [[ $(oc get pods -l app.kubernetes.io/instance=cert-manager -n cert-manage
 
 # Configuration
 CLUSTER_DOMAIN=$(oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}')
-AWS_DEFAULT_REGION="eu-west-1"
-echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
-echo "AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}"
+AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:=eu-west-1}"
 
 if [[ -z "${CLUSTER_DOMAIN}" ]]; then
   echo "Error: CLUSTER_DOMAIN could not be detected. Please ensure the OpenShift DNS operator is running and DNS is configured."
   exit 1
+else
+  echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
 fi
 
-# 2) Ask user to confirm/change AWS region
-read -p "AWS region for Route53 DNS (default: ${AWS_DEFAULT_REGION}): " INPUT_AWS_REGION
-if [[ -n "${INPUT_AWS_REGION}" ]]; then
-  AWS_DEFAULT_REGION="${INPUT_AWS_REGION}"
+if [[ -z "${AWS_DEFAULT_REGION}" ]]; then
+  echo "Error: AWS_DEFAULT_REGION could not be detected. Make sure AWS_DEFAULT_REGION is not empty."
+  exit 1
+else
+  echo "AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}"
 fi
-echo "Using AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}"
+```
 
+Finally install the certificate issuers:
 
+```bash
 # 3) Configure the OpenShift certificates for Ingress and API
 cat <<EOF | oc apply -f -
 ---
@@ -301,7 +302,11 @@ oc get certificates.cert-manager.io --all-namespaces -o custom-columns='NAMESPAC
 | Node Feature Discovery (NFD) Operator | `stable` | Detects GPU hardware capabilities |
 | NVIDIA GPU Operator | `v24.9` or latest | GPU device plugin, drivers, DCGM |
 
-Install NFD first, then the GPU Operator. Create the required custom resources:
+Go to `Ecosystem/Software Catalog` and install NFD Operator first, then the GPU Operator.
+
+TODO: ADD screenshots.
+
+Then create the required custom resources like:
 
 ```yaml
 apiVersion: nfd.openshift.io/v1
@@ -311,8 +316,22 @@ metadata:
   namespace: openshift-nfd
 spec:
   operand:
-    image: registry.redhat.io/openshift4/ose-node-feature-discovery-rhel9:v4.20
+    image: registry.redhat.io/openshift4/ose-node-feature-discovery-rhel9
+    imagePullPolicy: Always
+  workerConfig:
+    configData: |
+      core:
+        sleepInterval: 60s
+      sources:
+        pci:
+          deviceClassWhitelist:
+            - "0200"
+            - "03"
+            - "12"
+          deviceLabelFields:
+            - vendor
 ```
+and like:
 
 ```yaml
 apiVersion: nvidia.com/v1
@@ -338,6 +357,8 @@ spec:
     strategy: single  # or 'mixed' if using MIG partitioning
 ```
 
+Using these commands:
+
 ```sh
 oc apply -k gitops/instance/nfd
 oc apply -k gitops/instance/nvidia
@@ -349,9 +370,13 @@ See: [NVIDIA GPU Operator on Red Hat OpenShift Container Platform](https://docs.
 
 ```sh
 export INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
-export AWS_REGION="eu-west-1"
-export AMI_ID="ami-0b8c325b7499597c6"
-export AWS_INSTANCE_TYPE="g5.2xlarge"
+export AWS_REGION="${AWS_REGION:=eu-west-1}"
+export AMI_ID="${AMI_ID:=ami-0b8c325b7499597c6}"
+export AWS_INSTANCE_TYPE="${AWS_INSTANCE_TYPE:=g5.2xlarge}"
+export AWS_INSTANCES_PER_AZ=${AWS_INSTANCES_PER_AZ:=1}
+
+echo "INFRA_ID=${INFRA_ID}, AWS_REGION=${AWS_REGION}, AMI_ID=${AMI_ID}, AWS_INSTANCE_TYPE=${AWS_INSTANCE_TYPE}, AWS_INSTANCES_PER_AZ=${AWS_INSTANCES_PER_AZ}"
+
 
 for AZ in a b c; do
   helm template gpu-worker ./gitops/instance/machine-sets/gpu-worker \
@@ -403,10 +428,11 @@ oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
 
 # 5. Red Hat Build of Kueue (needed for workbenches...)
 oc apply -k gitops/operators/kueue-operator
+oc get csv -n openshift-operators -w | grep -E "kueue"
 
 # 6. Red Hat OpenShift AI
 oc apply -k gitops/operators/rhoai
-oc get csv -n redhat-ods-operator -w
+oc get csv -n redhat-ods-operator -w | grep -E "rhods"
 
 # 7. Monitoring operators
 # 1) Cluster Observability Operator (optional; metrics / MonitoringStack)
@@ -415,28 +441,31 @@ oc get csv -n redhat-ods-operator -w
 
 # 2) Tempo Operator (distributed tracing)
 oc apply -k gitops/operators/tempo-operator
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-tempo-operator -l operators.coreos.com/tempo-product.openshift-tempo-operator= --timeout=300s
+oc get csv -n openshift-operators -w | grep -E "tempo"
 
 # 3) OpenTelemetry Operator (collector for traces/metrics/logs)
 oc apply -k gitops/operators/opentelemetry-operator
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-opentelemetry-operator -l operators.coreos.com/opentelemetry-product.openshift-opentelemetry-operator= --timeout=300s
-# If you install Helm charts that use Instrumentation (e.g. llama-stack-demo), wait for the CRD:
-# oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
+oc get csv -n openshift-operators -w | grep -E "opentelemetry"
+oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
 
 # 4) Grafana Operator (optional; custom Grafana/dashboards)
 oc apply -k gitops/operators/grafana-operator
+oc get csv -n grafana-operator -w | grep -E "grafana"
 oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
 
-# Optional: wait for all monitoring operators in one go (if you already applied them)
-# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-cluster-observability-operator -l operators.coreos.com/openshift-cluster-observability-operator.openshift-cluster-observability-operator= --timeout=300s
-# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-tempo-operator -l operators.coreos.com/tempo-product.openshift-tempo-operator= --timeout=300s
-# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n openshift-opentelemetry-operator -l operators.coreos.com/opentelemetry-product.openshift-opentelemetry-operator= --timeout=300s
-# oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
-
 # 8. Leader Worker Set
-oc apply -k ./gitops/operators/leader-worker-set
+# Apply leader-worker-set until the CRD is available (works around install race)
+until oc apply -k ./gitops/operators/leader-worker-set; do
+  echo "Waiting for LeaderWorkerSetOperator CRD to become available..."
+  sleep 10
+done
 
 # 9. Configure OpenShift AI (DSCInitialization and DataScienceCluster)
+# Wait until CRDs exist (Kueue + dashboard reconcile after the operators; applying too early
+# yields "resource mapping not found" for ClusterQueue, ResourceFlavor, OdhDashboardConfig).
+oc wait --for=condition=Established crd/clusterqueues.kueue.x-k8s.io --timeout=600s
+oc wait --for=condition=Established crd/resourceflavors.kueue.x-k8s.io --timeout=600s
+oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io --timeout=600s
 # Use helm template (not install): the chart emits resources in multiple namespaces
 helm template rhoai ./gitops/instance/rhoai | oc apply -f -
 
@@ -447,7 +476,7 @@ oc wait --for=condition=ready pod -l control-plane=odh-model-controller -n redha
 oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager -n redhat-ods-applications --timeout=300s
 ```
 
-### 3.2 Pipeline Dependencies
+### 3.4 Pipeline Dependencies
 
 | Operator | Channel | Purpose |
 |---|---|---|
@@ -457,16 +486,25 @@ oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager -n 
 ```sh
 # Install pipelines
 oc apply -k gitops/operators/pipelines
+
+# If the install plan approval is set to Manual, approve it with:
+# Find the InstallPlan for the OpenShift Pipelines Operator:
+oc get installplan -n openshift-operators --output=custom-columns="NAME:.metadata.name,CSV:.spec.clusterServiceVersionNames" | grep openshift-pipelines-operator-rh
+
+# Copy the InstallPlan NAME returned for openshift-pipelines-operator-rh, then approve it:
+INSTALLPLAN_NAME=$(oc get installplan -n openshift-operators -o json | jq -r '.items[] | select(.spec.clusterServiceVersionNames[]? | contains("openshift-pipelines-operator-rh")) | .metadata.name')
+oc patch installplan "$INSTALLPLAN_NAME" -n openshift-operators --type merge --patch '{"spec":{"approved":true}}'
+
+# Wait until succeded
+oc get csv -n openshift-operators -w | grep -E "pipelines"
 ```
 
 
 ### 3.5 Check Operators
 
 ```sh
-llm-d-playbook/scripts/check-operators.sh
+./scripts/check-operators.sh
 ```
-
-
 
 # Quick Start Guide to Deploy llm-d
 
@@ -476,17 +514,25 @@ Deploy LLM-D on a connected OpenShift cluster.
 
 Create the GatewayClass and Gateway for LLM-D:
 
-```bash
-# oc apply -k gitops/instance/llm-d/gateway
+If the LoadBalancer type of Services are handled automatically then use:
 
-APP_NAME="gateway"
+**Uisng load balancer with pre-existing certificate:**
+
+```bash
+APP_NAME=gateway
+GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
 CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
 helm template gitops/instance/llm-d/gateway \
   --name-template ${APP_NAME} \
+  --set gatewayName="${GATEWAY_NAME}" \
   --set clusterDomain="${CLUSTER_DOMAIN}" \
-  --include-crds | oc apply -f -
+  --set subdomain=inference \
+  --set useOpenShiftRoute=false \
+  --set tls.secretName=ingress-certs --include-crds | oc apply -f -
 ```
+
+| *NOTE:* Otherwise look into **Example deployments** on `gitops/instance/llm-d/gateway/README.md`.
 
 Verify the Gateway is ready:
 
@@ -495,7 +541,7 @@ oc get gateway -n openshift-ingress
 
 # Expected output:
 # NAME                     CLASS              ADDRESS   PROGRAMMED   AGE
-# openshift-ai-inference   openshift-default  ...       True         ...
+# openshift-ai-inference   openshift-ai-inference-class  ...       True         ...
 ```
 
 ## Step 2: Create Namespace
