@@ -10,9 +10,7 @@ kind: OperatorGroup
 metadata:
   name: grafana-operator
   namespace: grafana-operator
-spec:
-  targetNamespaces:
-  - grafana-operator
+spec: {}
 ---
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
