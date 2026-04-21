@@ -1,0 +1,19 @@
+---
+apiVersion: config.openshift.io/v1
+kind: APIServer
+metadata:
+  name: cluster
+  annotations:
+    argocd.argoproj.io/sync-options: ServerSideApply=true
+    argocd.argoproj.io/sync-wave: "15"
+spec:
+  servingCerts:
+    namedCertificates:
+      - names:
+        - "api.{{ .Values.clusterDomain }}"
+        servingCertificate:
+          name: api-certs
+  {{- if .Values.etcdEncryption.enabled }}
+  encryption:
+    type: aescbc
+  {{- end }}

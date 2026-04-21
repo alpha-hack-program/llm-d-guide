@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cert-manager-route53
+description: A Helm chart to configure cert-manager for the default certificates in OpenShift
+
+type: application
+
+version: 0.1.0
+
+appVersion: "1.16.0"

@@ -209,8 +209,8 @@ spec:
     server: 'https://kubernetes.default.svc'
   project: default
   source:
-    path: 02-cert-manager-operator
-    repoURL: https://github.com/alvarolop/ocp-secured-integration.git
+    path: gitops/operators/cert-manager-operator
+    repoURL: https://github.com/alpha-hack-program/llm-d-guide.git
     targetRevision: main
   syncPolicy:
     automated:
@@ -271,8 +271,8 @@ spec:
     server: 'https://kubernetes.default.svc'
   project: default
   source:
-    path: 02-cert-manager-route53
-    repoURL: https://github.com/alvarolop/ocp-secured-integration.git
+    path: gitops/operators/cert-manager-route53
+    repoURL: https://github.com/alpha-hack-program/llm-d-guide.git
     targetRevision: main
     helm:
       parameters:

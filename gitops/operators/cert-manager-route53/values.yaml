@@ -1,0 +1,7 @@
+# Default values for cert-manager-route53.
+
+etcdEncryption:
+  enabled: false
+
+route53:
+  region: eu-west-1
