@@ -10,18 +10,19 @@
 ## Table of Contents
 
 1. [Overview](#1-overview)
-2. [Global Prerequisites](#2-global-prerequisites)
-3. [Prerequisite Operators](#3-prerequisite-operators)
-4. [Installing the Red Hat OpenShift AI Operator](#4-installing-the-red-hat-openshift-ai-operator)
-5. [Configuring the DataScienceCluster](#5-configuring-the-datasciencecluster)
-6. [TLS Certificate Management](#6-tls-certificate-management)
-7. [OpenTelemetry Observability for RHOAI](#7-opentelemetry-observability-for-rhoai)
-8. [Distributed Inference with llm-d](#8-distributed-inference-with-llm-d)
-9. [Model as a Service (MaaS)](#9-model-as-a-service-maas)
-10. [Validation and Testing](#10-validation-and-testing)
-11. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
-12. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
-13. [Appendix C — Reference Links](#appendix-c--reference-links)
+2. [Using This Guide with Claude Code or OpenCode](#using-this-guide-with-claude-code-or-opencode)
+3. [Global Prerequisites](#2-global-prerequisites)
+4. [Prerequisite Operators](#3-prerequisite-operators)
+5. [Installing the Red Hat OpenShift AI Operator](#4-installing-the-red-hat-openshift-ai-operator)
+6. [Configuring the DataScienceCluster](#5-configuring-the-datasciencecluster)
+7. [TLS Certificate Management](#6-tls-certificate-management)
+8. [OpenTelemetry Observability for RHOAI](#7-opentelemetry-observability-for-rhoai)
+9. [Distributed Inference with llm-d](#8-distributed-inference-with-llm-d)
+10. [Model as a Service (MaaS)](#9-model-as-a-service-maas)
+11. [Validation and Testing](#10-validation-and-testing)
+12. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
+13. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
+14. [Appendix C — Reference Links](#appendix-c--reference-links)
 
 ---
 
@@ -59,6 +60,45 @@ Red Hat OpenShift AI (RHOAI) 3.3 is a self-managed AI/ML platform that provides 
 * [Supported Configurations for 3.x](https://access.redhat.com/articles/rhoai-supported-configs-3.x)
 * [Supported Product and Hardware Configurations](https://docs.redhat.com/en/documentation/red_hat_ai/3/html/supported_product_and_hardware_configurations/index)
 * [llm-d Release Component Versions](https://access.redhat.com/articles/7136620)
+
+---
+
+## Using This Guide with Claude Code or OpenCode
+
+This repository includes an [`AGENTS.md`](AGENTS.md) file that gives Claude Code (and compatible tools such as OpenCode) full context about the installation phases, required environment variables, wait conditions, and known gotchas — so an AI assistant can co-pilot the deployment rather than just answer questions about it.
+
+### What the AI assistant can do for you
+
+* Run preflight checks and report failures before you touch anything.
+* Fill in `helm template` and `oc apply` commands with your actual environment variables.
+* Watch pod and operator status and tell you when it is safe to move to the next phase.
+* Diagnose errors by reading command output you paste into the chat.
+* Stop and ask for confirmation before any destructive or cluster-wide action (InstallPlan approvals, RBAC changes).
+
+### How to start a session
+
+1. Open this repository in Claude Code or OpenCode — the tool will read `AGENTS.md` automatically.
+2. Make sure you are logged in to the cluster (`oc whoami`).
+3. Tell the assistant which phase you are on and provide any environment variables it asks for:
+
+   > *"I'm on Phase 0. My AWS region is `eu-west-1`. Let's start the preflight checks."*
+
+4. After each phase the assistant will report a **human gate** — a set of conditions you need to confirm before it proceeds.
+
+### Phase overview
+
+| Phase | What happens | Approx. time |
+| --- | --- | --- |
+| 0 | Cluster validation (OCP version, admin access, StorageClass, no conflicting operators) | 5 min |
+| 1 | ArgoCD + cert-manager + Let's Encrypt certificates for Ingress and API | 15–20 min |
+| 2 | GPU nodes (AWS MachineSets), Node Feature Discovery, NVIDIA GPU Operator | 20–40 min |
+| 3 | Connectivity Link, Kueue, Leader Worker Set, RHOAI operator, DataScienceCluster | 20–30 min |
+| 4 | Monitoring stack — Tempo, OpenTelemetry, Grafana | 10 min |
+| 5 | llm-d Quick Start — Gateway, namespace, LLMInferenceService, curl smoke test | 15–20 min |
+
+### Resuming after an error
+
+Paste the failing command and its output into the chat and say which phase you were on. The assistant will diagnose the problem and suggest the next step without restarting from scratch.
 
 ---
 
