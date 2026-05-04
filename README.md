@@ -92,7 +92,7 @@ This repository includes an [`AGENTS.md`](AGENTS.md) file that gives Claude Code
 | 0 | Cluster validation (OCP version, admin access, StorageClass, no conflicting operators) | 5 min |
 | 1 | ArgoCD + cert-manager + Let's Encrypt certificates for Ingress and API | 15–20 min |
 | 2 | GPU nodes (AWS MachineSets), Node Feature Discovery, NVIDIA GPU Operator | 20–40 min |
-| 3 | Connectivity Link, Kueue, Leader Worker Set, RHOAI operator, DataScienceCluster | 20–30 min |
+| 3 | Connectivity Link, Leader Worker Set, RHOAI operator, DataScienceCluster | 20–30 min |
 | 4 | Monitoring stack — Tempo, OpenTelemetry, Grafana | 10 min |
 | 5 | llm-d Quick Start — Gateway, namespace, LLMInferenceService, curl smoke test | 15–20 min |
 
@@ -267,7 +267,7 @@ if ! oc whoami &>/dev/null; then
   exit 1
 fi
 
-# 1) Wait for the operator to be ready
+# 1) Wait for the operator to be ready ==> TODO REVIEW
 echo -n "Waiting for cert-manager pods to be ready..."
 while [[ $(oc get pods -l app.kubernetes.io/instance=cert-manager -n cert-manager \
   -o 'jsonpath={..status.conditions[?(@.type=="Ready")].status}') != "True True True" ]]; do
@@ -338,6 +338,8 @@ Install NFD first, then the NVIDIA GPU Operator, via `Ecosystem / Software Catal
 
 Create the required NodeFeatureDiscovery custom resource:
 
+**EXAMPLE, don't create manually, keep reading:**
+
 ```yaml
 apiVersion: nfd.openshift.io/v1
 kind: NodeFeatureDiscovery
@@ -363,6 +365,8 @@ spec:
 ```
 
 Create the ClusterPolicy custom resource:
+
+**EXAMPLE, don't create manually, keep reading:**
 
 ```yaml
 apiVersion: nvidia.com/v1
@@ -397,6 +401,8 @@ oc apply -k gitops/instance/nvidia
 
 See: [NVIDIA GPU Operator on Red Hat OpenShift Container Platform](https://docs.nvidia.com/datacenter/cloud-native/openshift/latest/index.html)
 
+TODO Add some tests to verify that NVIDIA related labels are added to the GPU nodes.
+
 #### Adding A10G GPU nodes in AWS with MachineSets
 
 ```bash
@@ -425,7 +431,7 @@ done
 | --- | --- | --- | --- |
 | Red Hat — Authorino Operator | `managed-services` | Token auth for single-model serving endpoints | KServe / llm-d |
 | cert-manager Operator for Red Hat OpenShift | `stable-v1` | Automated TLS certificate lifecycle | Recommended (see above) |
-| Red Hat Build of Kueue | `stable` | Distributed workload quota and scheduling | llm-d, GPUaaS |
+| Red Hat Build of Kueue | `stable` | Distributed workload quota and scheduling | GPUaaS / Distributed Workloads only (**not** required for llm-d) |
 | Red Hat OpenShift Leader Worker Set Operator | `stable` | Multi-node leader/worker pod sets | llm-d (required) |
 
 > **Note on Serverless:** The Red Hat OpenShift Serverless operator (Knative Serving) is **not required** for RHOAI 3.x. It was a prerequisite for the legacy KServe serverless mode in RHOAI 2.x, but RHOAI 3.x uses KServe in raw deployment mode by default and does not require Serverless.
@@ -443,20 +449,30 @@ oc get csv -n openshift-operators -w | grep -E "rhcl|authorino|limitador"
 # Wait for AuthPolicy CRD
 oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
 
-# 2. Red Hat Build of Kueue
-oc apply -k gitops/operators/kueue-operator
-oc get csv -n openshift-operators -w | grep -E "kueue"
-
-# 3. Leader Worker Set (required for llm-d multi-node deployments)
+# 2. Leader Worker Set (required for llm-d multi-node deployments)
 # Apply in a loop to work around potential CRD install race conditions
 until oc apply -k ./gitops/operators/leader-worker-set; do
   echo "Waiting for LeaderWorkerSet CRD to become available..."
   sleep 10
 done
+oc wait --for=condition=Established crd/leaderworkersetoperators.operator.openshift.io --timeout=300s
+oc get csv -n openshift-lws-operator -w | grep -E "leader-worker-set"
 
-# 4. Red Hat OpenShift AI Operator
+# 3. Red Hat OpenShift AI Operator
 oc apply -k gitops/operators/rhoai
 oc get csv -n redhat-ods-operator -w | grep -E "rhods"
+
+# 4. Configure OpenShift AI (DSCInitialization and DataScienceCluster)
+oc wait --for=condition=Established crd/dashboards.components.platform.opendatahub.io --timeout=600s
+# Render and apply (chart emits resources across multiple namespaces)
+helm template rhoai ./gitops/instance/rhoai | oc apply -f -
+
+# Wait for LLMInferenceService CRD and controller pods
+oc wait --for=condition=Established crd/llminferenceservices.serving.kserve.io --timeout=300s
+oc wait --for=condition=ready pod -l control-plane=odh-model-controller \
+  -n redhat-ods-applications --timeout=300s
+oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager \
+  -n redhat-ods-applications --timeout=300s
 
 # 5. Monitoring stack
 # a) Tempo Operator (distributed tracing)
@@ -473,21 +489,112 @@ oc apply -k gitops/operators/grafana-operator
 oc get csv -n grafana-operator -w | grep -E "grafana"
 oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator \
   -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
+```
 
-# 6. Configure OpenShift AI (DSCInitialization and DataScienceCluster)
-# Wait for CRDs from Kueue and Dashboard before applying
+#### Optional — Red Hat Build of Kueue (GPUaaS / Distributed Workloads only)
+
+> ⚠️ **Do NOT install** unless you specifically need GPUaaS or distributed workload queue management
+> (Ray, PyTorch distributed training). Installing Kueue causes the RHOAI dashboard to label all
+> new projects with `kueue.openshift.io/managed=true`. Projects with this label only see hardware
+> profiles with `scheduling.type: Queue` — standard `Node`-type profiles become invisible unless
+> matching `Queue`-type profiles and LocalQueues are also configured.
+>
+> **Known issue (RHOAI 3.3.0):** The dashboard does not reload its configuration when `disableKueue`
+> is toggled in `OdhDashboardConfig`. Restart the dashboard after any change:
+> `oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications`
+
+```bash
+# OPTIONAL — only for GPUaaS / distributed workloads
+oc apply -k gitops/operators/kueue-operator
+oc get csv -n openshift-operators -w | grep -E "kueue"
+```
+
+```bash
+# OPTIONAL — wait for Kueue CRDs before configuring ClusterQueue
 oc wait --for=condition=Established crd/clusterqueues.kueue.x-k8s.io --timeout=600s
 oc wait --for=condition=Established crd/resourceflavors.kueue.x-k8s.io --timeout=600s
-oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io --timeout=600s
-# Render and apply (chart emits resources across multiple namespaces)
-helm template rhoai ./gitops/instance/rhoai | oc apply -f -
+oc wait --for=condition=Established crd/localqueues.kueue.x-k8s.io --timeout=600s
+```
 
-# Wait for LLMInferenceService CRD and controller pods
-oc wait --for=condition=Established crd/llminferenceservices.serving.kserve.io --timeout=300s
-oc wait --for=condition=ready pod -l control-plane=odh-model-controller \
-  -n redhat-ods-applications --timeout=300s
-oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager \
-  -n redhat-ods-applications --timeout=300s
+```bash
+# OPTIONAL — set Kueue to Managed in the DataScienceCluster after operator is ready
+oc patch datasciencecluster default-dsc \
+  --type='merge' \
+  -p '{"spec":{"components":{"kueue":{"managementState":"Managed","defaultClusterQueueName":"default","defaultLocalQueueName":"default"}}}}'
+```
+
+```bash
+# OPTIONAL — minimal ClusterQueue + ResourceFlavor setup
+cat <<EOF | oc apply -f -
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: default-flavor
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: default
+spec:
+  namespaceSelector: {}
+  resourceGroups:
+  - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
+    flavors:
+    - name: default-flavor
+      resources:
+      - name: cpu
+        nominalQuota: "64"
+      - name: memory
+        nominalQuota: "256Gi"
+      - name: nvidia.com/gpu
+        nominalQuota: "8"
+EOF
+```
+
+```bash
+# OPTIONAL — create a LocalQueue in each Kueue-managed namespace
+cat <<EOF | oc apply -f -
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: default
+  namespace: <your-namespace>
+spec:
+  clusterQueue: default
+EOF
+```
+
+```bash
+# OPTIONAL — Queue-type hardware profile for Kueue-managed namespaces
+# (Node-type profiles are invisible in namespaces with kueue.openshift.io/managed=true)
+cat <<EOF | oc apply -f -
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  name: default-cpu-queue
+  namespace: redhat-ods-applications
+  annotations:
+    opendatahub.io/display-name: "Default CPU (Kueue)"
+    opendatahub.io/disabled: "false"
+spec:
+  identifiers:
+  - displayName: CPU
+    identifier: cpu
+    minCount: 1
+    maxCount: 4
+    defaultCount: 2
+    resourceType: CPU
+  - displayName: Memory
+    identifier: memory
+    minCount: 2Gi
+    maxCount: 8Gi
+    defaultCount: 4Gi
+    resourceType: Memory
+  scheduling:
+    type: Queue
+    queue:
+      localQueueName: default
+EOF
 ```
 
 ### 3.4 Pipeline Dependencies
@@ -501,7 +608,7 @@ oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager \
 ```bash
 oc apply -k gitops/operators/pipelines
 
-# If the InstallPlan requires manual approval:
+# If the InstallPlan requires manual approval (YOU MAY NEED TO WAIT FOR SOME MINS TO SEE THE INSTALLPLAN!!):
 INSTALLPLAN_NAME=$(oc get installplan -n openshift-operators -o json | \
   jq -r '.items[] | select(.spec.clusterServiceVersionNames[]? | contains("openshift-pipelines-operator-rh")) | .metadata.name')
 oc patch installplan "$INSTALLPLAN_NAME" -n openshift-operators \
@@ -556,6 +663,24 @@ oc get gateway -n openshift-ingress
 # Expected output:
 # NAME                              CLASS                            PROGRAMMED   AGE
 # openshift-ai-inference            openshift-ai-inference-class     True         ...
+```
+
+** Using OpenShift router and generating a self-signed certificate **
+
+```bash
+APP_NAME=gateway
+GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
+
+helm template gitops/instance/llm-d/gateway \
+  --name-template ${APP_NAME} \
+  --set gatewayName="${GATEWAY_NAME}" \
+  --set clusterDomain="${CLUSTER_DOMAIN}" \
+  --set subdomain=inference \
+  --set useOpenShiftRoute=true \
+  --set tls.secretName="${GATEWAY_NAME}" \
+  --set tls.generate=true --include-crds | oc apply -f -
 ```
 
 ## Step 2: Create Namespace
@@ -804,6 +929,9 @@ oc logs -f -l app.kubernetes.io/component=llminferenceservice-router-scheduler -
 | InstallPlan stuck pending | Manual approval required | `oc patch installplan <NAME> -n openshift-operators --type merge -p '{"spec":{"approved":true}}'` |
 | GPU nodes not scheduling | NFD labels missing | Check `oc get nodes -l feature.node.kubernetes.io/pci-10de.present=true` |
 | cert-manager webhook errors | cert-manager pods not ready | Wait for all 3 cert-manager pods (controller, cainjector, webhook) to be Ready |
+| No hardware profiles in RHOAI dashboard | `kueue.openshift.io/managed=true` on namespace but Kueue not installed or no `Queue`-type profiles exist | Either remove the label (`oc label namespace <ns> kueue.openshift.io/managed-`) or create `Queue`-type hardware profiles with a matching LocalQueue |
+| Hardware profiles missing after toggling `disableKueue` | Dashboard does not reload config automatically | Restart the dashboard: `oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications` |
+| model-catalog API returns 500 errors | PostgreSQL schema empty (migrations did not apply) | Restart model-catalog: `oc rollout restart deployment/model-catalog -n rhoai-model-registries` |
 
 ---
 

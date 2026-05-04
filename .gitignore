@@ -5,3 +5,4 @@ llm-d-playbook
 *.bkp
 old
 *.tmp.yaml
+.claude/worktrees/

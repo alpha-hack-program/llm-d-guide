@@ -13,8 +13,8 @@ llm-d-guide/
 ├── gitops/
 │   ├── operators/
 │   │   ├── connectivity-link/       # Authorino + Limitador (Kuadrant stack)
-│   │   ├── kueue-operator/          # Red Hat Build of Kueue
 │   │   ├── leader-worker-set/       # LeaderWorkerSet operator (required for llm-d)
+│   │   ├── kueue-operator/          # Red Hat Build of Kueue (OPTIONAL — only for GPUaaS/distributed workloads)
 │   │   ├── rhoai/                   # RHOAI operator subscription
 │   │   ├── tempo-operator/          # Distributed tracing
 │   │   ├── opentelemetry-operator/  # OTel collector
@@ -35,6 +35,23 @@ llm-d-guide/
 │   └── preflight-validation.sh      # Pre-flight cluster checks with pass/fail summary
 └── README.md                        # Full installation guide
 ```
+
+---
+
+## Operator Dependency Matrix
+
+| Operator | llm-d | GPUaaS / Distributed Workloads | Notes |
+|---|---|---|---|
+| **LeaderWorkerSet** | ✅ Required | ✅ Required | Multi-node MoE and P/D disaggregation |
+| **Connectivity Link** (Authorino + Limitador) | ✅ Required | ✅ Required | KServe auth + MaaS |
+| **Red Hat Build of Kueue** | ❌ Not required | ✅ Required | Do NOT install for llm-d-only setups — causes namespace label conflicts |
+| **NFD + NVIDIA GPU Operator** | ✅ Required | ✅ Required | GPU node detection and drivers |
+| **cert-manager** | ✅ Required | ✅ Required | TLS lifecycle |
+
+> ⚠️ **Important:** Installing the Kueue operator (even with `managementState: Removed` in the DSC)
+> causes the RHOAI dashboard to label every new project with `kueue.openshift.io/managed=true`.
+> This makes hardware profiles with `scheduling.type: Node` invisible in those projects.
+> Only install Kueue if you specifically need GPUaaS or distributed workload queue management.
 
 ---
 
@@ -159,12 +176,18 @@ oc get nodes -o json | jq '.items[].status.capacity | select(."nvidia.com/gpu")'
 
 ## Phase 3 — Core Operators + RHOAI
 
-**Goal:** Install Connectivity Link, Kueue, Leader Worker Set, and RHOAI, then configure the DataScienceCluster.
+**Goal:** Install Connectivity Link, LeaderWorkerSet, and RHOAI, then configure the DataScienceCluster.
+
+> ⚠️ **Do NOT install the Kueue operator** unless you specifically need GPUaaS or distributed
+> workload queue management (Ray, PyTorch distributed training). Installing Kueue causes the
+> RHOAI dashboard to label all new projects with `kueue.openshift.io/managed=true`, which
+> breaks hardware profile visibility for workbenches and model serving unless matching
+> `Queue`-type hardware profiles and LocalQueues are also configured.
 
 **Install order (sequence matters):**
 
 ```
-connectivity-link  →  kueue-operator  →  leader-worker-set  →  rhoai operator
+connectivity-link  →  leader-worker-set  →  rhoai operator
        ↓
   (wait for CRDs)
        ↓
@@ -178,9 +201,8 @@ connectivity-link  →  kueue-operator  →  leader-worker-set  →  rhoai opera
 # Connectivity Link — AuthPolicy CRD must exist before RHOAI
 oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
 
-# Kueue CRDs
-oc wait --for=condition=Established crd/clusterqueues.kueue.x-k8s.io --timeout=600s
-oc wait --for=condition=Established crd/resourceflavors.kueue.x-k8s.io --timeout=600s
+# LeaderWorkerSet CRD — required for llm-d multi-node deployments
+oc wait --for=condition=Established crd/leaderworkersets.leaderworkerset.x-k8s.io --timeout=300s
 
 # RHOAI Dashboard CRD
 oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io --timeout=600s
@@ -191,6 +213,138 @@ oc wait --for=condition=ready pod -l control-plane=odh-model-controller \
   -n redhat-ods-applications --timeout=300s
 oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager \
   -n redhat-ods-applications --timeout=300s
+```
+
+### Optional — Kueue (GPUaaS / Distributed Workloads only)
+
+> ℹ️ Skip this section entirely if you are only deploying llm-d.
+> Only proceed if you need Ray, PyTorch distributed training, or GPU quota management across teams.
+
+**1. Install the Red Hat Build of Kueue operator:**
+
+```bash
+# OPTIONAL — only for GPUaaS / distributed workloads
+oc apply -k gitops/operators/kueue-operator
+oc get csv -n openshift-operators -w | grep kueue
+```
+
+**2. Wait for Kueue CRDs:**
+
+```bash
+# OPTIONAL — only run if Kueue was installed above
+oc wait --for=condition=Established crd/clusterqueues.kueue.x-k8s.io --timeout=600s
+oc wait --for=condition=Established crd/resourceflavors.kueue.x-k8s.io --timeout=600s
+oc wait --for=condition=Established crd/localqueues.kueue.x-k8s.io --timeout=600s
+```
+
+**3. Set Kueue to `Managed` in the DataScienceCluster:**
+
+```bash
+# OPTIONAL — only if Kueue operator is installed
+oc patch datasciencecluster default-dsc \
+  --type='merge' \
+  -p '{"spec":{"components":{"kueue":{"managementState":"Managed","defaultClusterQueueName":"default","defaultLocalQueueName":"default"}}}}'
+```
+
+**4. Create a ClusterQueue and ResourceFlavor:**
+
+```bash
+# OPTIONAL — minimal Kueue setup for a single team/namespace
+cat <<EOF | oc apply -f -
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: default-flavor
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: default
+spec:
+  namespaceSelector: {}
+  resourceGroups:
+  - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
+    flavors:
+    - name: default-flavor
+      resources:
+      - name: cpu
+        nominalQuota: "64"
+      - name: memory
+        nominalQuota: "256Gi"
+      - name: nvidia.com/gpu
+        nominalQuota: "8"
+EOF
+```
+
+**5. Create a LocalQueue in each Kueue-managed namespace:**
+
+```bash
+# OPTIONAL — run once per namespace that needs Kueue queue management
+cat <<EOF | oc apply -f -
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: default
+  namespace: <your-namespace>
+spec:
+  clusterQueue: default
+EOF
+```
+
+**6. Create Hardware Profiles with `type: Queue` for Kueue-managed namespaces:**
+
+```bash
+# OPTIONAL — Kueue-managed namespaces require Queue-type hardware profiles
+# Node-type profiles are invisible in namespaces with kueue.openshift.io/managed=true
+cat <<EOF | oc apply -f -
+apiVersion: infrastructure.opendatahub.io/v1
+kind: HardwareProfile
+metadata:
+  name: default-cpu-queue
+  namespace: redhat-ods-applications
+  annotations:
+    opendatahub.io/display-name: "Default CPU (Kueue)"
+    opendatahub.io/dashboard-feature-visibility: '["workbench","modelServer"]'
+    opendatahub.io/disabled: "false"
+spec:
+  identifiers:
+  - displayName: CPU
+    identifier: cpu
+    minCount: 1
+    maxCount: 4
+    defaultCount: 2
+    resourceType: CPU
+  - displayName: Memory
+    identifier: memory
+    minCount: 2Gi
+    maxCount: 8Gi
+    defaultCount: 4Gi
+    resourceType: Memory
+  scheduling:
+    type: Queue
+    queue:
+      localQueueName: default
+EOF
+```
+
+> ⚠️ **Known issue (RHOAI 3.3.0):** The RHOAI dashboard does not reload its configuration
+> when `disableKueue` is changed in `OdhDashboardConfig`. The dashboard keeps labeling new projects
+> with `kueue.openshift.io/managed=true` until it is restarted (`oc rollout restart deployment/rhods-dashboard`).
+> Even after restart, the label may persist if the dashboard's internal cache is not cleared.
+> Workaround: always create namespaces via `oc new-project` (see below).
+
+**Creating projects for llm-d workloads:**
+
+Create projects normally from the RHOAI dashboard. If you encounter hardware profile visibility
+issues after changing Kueue configuration (e.g. switching from Kueue enabled to disabled),
+restart the dashboard and verify the `disableKueue` setting is applied. As a temporary workaround
+while the dashboard is reloading its config, you can create namespaces directly via `oc`:
+
+```bash
+# TEMPORARY WORKAROUND — only if the dashboard is still labeling projects with
+# kueue.openshift.io/managed=true after setting disableKueue: true and restarting
+oc new-project <project-name>
+oc label namespace <project-name> opendatahub.io/dashboard=true
 ```
 
 **Human gates:**
@@ -233,6 +387,9 @@ oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --time
 # LLMInferenceService CRD available
 oc get crd llminferenceservices.serving.kserve.io
 
+# LeaderWorkerSet CRD available (required for MoE multi-node)
+oc get crd leaderworkersets.leaderworkerset.x-k8s.io
+
 # Controller pods running
 oc get pods -n redhat-ods-applications \
   -l control-plane=odh-model-controller
@@ -255,6 +412,7 @@ oc get pods -n redhat-ods-applications \
 - If the Gateway is not `PROGRAMMED=True`, check that Connectivity Link / Authorino is Running and the `GatewayClass` CR was created.
 - If the LLMInferenceService is stuck `Not Ready`, describe it: `oc describe llminferenceservice <name> -n <namespace>` and check events.
 - For OCI model images (`registry.redhat.io/rhelai1/...`), ensure the cluster pull secret includes Red Hat registry credentials.
+- For MoE models (DeepSeek-R1, Mixtral), use the **Wide Expert-Parallelism** well-lit path which requires LeaderWorkerSet for multi-node orchestration.
 
 ---
 
@@ -280,6 +438,9 @@ oc get pods -n redhat-ods-applications
 # llm-d CRDs
 oc get crd | grep llminference
 
+# LeaderWorkerSet CRD
+oc get crd | grep leaderworkerset
+
 # Gateway status
 oc get gateway,httproute -n openshift-ingress
 
@@ -288,6 +449,17 @@ oc get llminferenceservice -A
 
 # GPU node capacity
 oc get nodes -o custom-columns='NAME:.metadata.name,GPU:.status.capacity.nvidia\.com/gpu'
+
+# Hardware profiles visibility check
+kubectl get hardwareprofile -n redhat-ods-applications \
+  -o custom-columns="NAME:.metadata.name,TYPE:.spec.scheduling.type,VISIBILITY:.metadata.annotations.opendatahub\.io/dashboard-feature-visibility"
+```
+
+```bash
+# OPTIONAL — Kueue status (only if Kueue was installed for GPUaaS/distributed workloads)
+oc get clusterqueue
+oc get localqueue -A
+oc get resourceflavor
 ```
 
 ---
@@ -298,5 +470,6 @@ oc get nodes -o custom-columns='NAME:.metadata.name,GPU:.status.capacity.nvidia\
 - **Always check `check-operators.sh`** before starting Phase 5.
 - **Always stop and ask** before patching an InstallPlan or applying anything that modifies cluster-wide RBAC.
 - **Never install** Service Mesh 2.x, OpenShift Serverless, or Open Data Hub — these conflict with RHOAI 3.x.
+- **Do NOT install Kueue** unless explicitly required for GPUaaS or distributed workloads — it causes namespace label conflicts with hardware profiles.
 - **Prefer `oc apply -k`** over raw `oc apply -f` for kustomize paths — it respects the overlay ordering.
 - If a command produces unexpected output, **stop and report** rather than continuing.

@@ -10,8 +10,8 @@ odhApplicationsNamespace: redhat-ods-applications
 # --- Feature toggles (drive component managementState and dashboard visibility) ---
 featureStore: false         # Feast operator
 modelsAsService: false      # KServe models-as-service
-distributedWorkloads: true # Distributed workloads
-kueue: true                 # Kueue operator
+distributedWorkloads: false # Distributed workloads
+kueue: false                 # Kueue operator
 llamaStack: true            # LlamaStack operator
 modelRegistry: true         # Model registry + dashboard menu
 mlflow: true                # MLflow operator
