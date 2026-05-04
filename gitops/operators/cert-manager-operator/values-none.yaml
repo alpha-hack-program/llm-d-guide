@@ -1,0 +1,3 @@
+# Values for bare-metal / on-premise deployments.
+# No cloud credentials or CredentialsRequest are created.
+cloud: none

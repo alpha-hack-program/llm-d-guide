@@ -13,11 +13,11 @@ spec:
   sourceNamespace: openshift-marketplace
   installPlanApproval: Automatic
   config:
-    # nodeSelector:
-    #   node-role.kubernetes.io/infra: ''
     tolerations:
       - key: node-role.kubernetes.io/infra
         operator: Exists
+    {{- if eq .Values.cloud "aws" }}
     env:
       - name: CLOUD_CREDENTIALS_SECRET_NAME
         value: aws-creds
+    {{- end }}

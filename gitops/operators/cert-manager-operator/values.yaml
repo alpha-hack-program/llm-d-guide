@@ -1,0 +1,8 @@
+# Default values for cert-manager-operator.
+
+# cloud: target cloud provider.
+# Supported values: "aws", "none"
+# - "aws"  — adds CLOUD_CREDENTIALS_SECRET_NAME env var and deploys the
+#             CredentialsRequest for Route53 DNS-01 challenge resolution.
+# - "none" — bare-metal / on-premise; no cloud credentials required.
+cloud: none

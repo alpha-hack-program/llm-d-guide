@@ -168,6 +168,15 @@ Leave the defaults as shown and click **Install**.
 
 Grant cert-manager the permissions it needs for Certificates, CertificateRequests, Orders, Challenges, ClusterIssuers, Issuers, and optional monitoring integration:
 
+`CLOUD` can be **none** or **aws**, change it to **aws** if running on **AWS**.
+
+```bash
+CLOUD=none
+helm template gitops/operators/cert-manager-operator-helm/ --set cloud=${CLOUD} --name-template test | oc apply -f -
+```
+
+If you want to use ArgoCD:
+
 ```bash
 oc apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
@@ -232,29 +241,32 @@ subjects:
 EOF
 ```
 
-#### Installing the operator
+#### Installing the operator with ArgoCD
 
 ```bash
 cat <<EOF | oc apply -f -
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  labels:
-    app: cert-manager-operator
-  name: cert-manager-operator
-  namespace: openshift-gitops
-spec:
-  destination:
-    server: 'https://kubernetes.default.svc'
-  project: default
-  source:
-    path: gitops/operators/cert-manager-operator
-    repoURL: https://github.com/alpha-hack-program/llm-d-guide.git
-    targetRevision: main
-  syncPolicy:
-    automated:
-      prune: false
-      selfHeal: false
+  apiVersion: argoproj.io/v1alpha1
+  kind: Application
+  metadata:
+    labels:   
+      app: cert-manager-operator
+    name: cert-manager-operator
+    namespace: openshift-gitops
+  spec:   
+    destination:
+      server: 'https://kubernetes.default.svc'
+    project: default                                        
+    source:
+      path: gitops/operators/cert-manager-operator
+      repoURL: https://github.com/alpha-hack-program/llm-d-guide.git
+      targetRevision: main                                                                                                                       
+      helm:
+        values: |   
+          cloud: ${CLOUD}
+    syncPolicy:   
+      automated:
+        prune: false                                                                                                                             
+        selfHeal: false                                     
 EOF
 ```
 

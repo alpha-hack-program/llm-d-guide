@@ -1,0 +1,4 @@
+# Values for AWS deployments.
+# Enables the Route53 DNS-01 CredentialsRequest and injects
+# CLOUD_CREDENTIALS_SECRET_NAME into the Subscription's spec.config.env.
+cloud: aws

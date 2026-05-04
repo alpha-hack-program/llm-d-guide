@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cert-manager-operator
+description: A Helm chart to deploy the cert-manager operator on OpenShift via OLM
+
+type: application
+
+version: 0.1.0
+
+appVersion: "stable-v1"
