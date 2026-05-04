@@ -653,19 +653,7 @@ helm template gitops/instance/llm-d/gateway \
   --include-crds | oc apply -f -
 ```
 
-> **Other gateway configurations:** See `gitops/instance/llm-d/gateway/README.md` for alternative setups (bare metal, self-signed certs, OpenShift Routes).
-
-Verify the Gateway is ready:
-
-```bash
-oc get gateway -n openshift-ingress
-
-# Expected output:
-# NAME                              CLASS                            PROGRAMMED   AGE
-# openshift-ai-inference            openshift-ai-inference-class     True         ...
-```
-
-** Using OpenShift router and generating a self-signed certificate **
+**Using OpenShift router and generating a self-signed certificate**
 
 ```bash
 APP_NAME=gateway
@@ -681,6 +669,18 @@ helm template gitops/instance/llm-d/gateway \
   --set useOpenShiftRoute=true \
   --set tls.secretName="${GATEWAY_NAME}" \
   --set tls.generate=true --include-crds | oc apply -f -
+```
+
+> **Other gateway configurations:** See `gitops/instance/llm-d/gateway/README.md` for alternative setups (bare metal, self-signed certs, OpenShift Routes).
+
+Verify the Gateway is ready:
+
+```bash
+oc get gateway -n openshift-ingress
+
+# Expected output:
+# NAME                              CLASS                            PROGRAMMED   AGE
+# openshift-ai-inference            openshift-ai-inference-class     True         ...
 ```
 
 ## Step 2: Create Namespace
