@@ -1,0 +1,20 @@
+{{- if .Values.mlflow }}
+---
+apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: {{ .Values.mlflowInstance.name | default "mlflow" }}
+  namespace: {{ .Values.odhApplicationsNamespace | default "redhat-ods-applications" }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  storage:
+    accessModes:
+      {{- toYaml .Values.mlflowInstance.storage.accessModes | nindent 6 }}
+    resources:
+      requests:
+        storage: {{ .Values.mlflowInstance.storage.storageSize | default "10Gi" }}
+  backendStoreUri: {{ .Values.mlflowInstance.backendStoreUri | default "sqlite:////mlflow/mlflow.db" | quote }}
+  artifactsDestination: {{ .Values.mlflowInstance.artifactsDestination | default "file:///mlflow/artifacts" | quote }}
+  serveArtifacts: {{ .Values.mlflowInstance.serveArtifacts | default true }}
+{{- end }}

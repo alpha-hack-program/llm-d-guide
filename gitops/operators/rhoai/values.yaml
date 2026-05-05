@@ -1,0 +1,54 @@
+# Red Hat OpenShift AI operator (OLM subscription).
+#
+# Default path is GA on stable-3.x (olmProfile: stable). For 3.4 early access,
+# set olmProfile: ea (beta channel + rhods-operator.3.4.0-ea.2), or export
+# RHOAI_OLM_PROFILE=ea and pass --set olmProfile=$RHOAI_OLM_PROFILE to helm.
+#
+# --- Combination reference (pin or override with channel + startingCSV) ---
+#
+# GA stable 3.3.x (default):
+#   channel: stable-3.x
+#   startingCSV: rhods-operator.3.3.2
+#
+# 3.4 early access (beta channel):
+#   channel: beta
+#   startingCSV: rhods-operator.3.4.0-ea.2
+#
+# To use EA from defaults, switch olmProfile (see commented line below).
+
+olmProfile: stable
+# olmProfile: ea
+
+presets:
+  stable:
+    channel: stable-3.x
+    startingCSV: rhods-operator.3.3.2
+  ea:
+    channel: beta
+    startingCSV: rhods-operator.3.4.0-ea.2
+
+# Optional: set both to override olmProfile (leave empty to use preset)
+channel: ""
+startingCSV: ""
+
+subscription:
+  name: rhods-operator
+  installPlanApproval: Automatic
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+
+namespace:
+  name: redhat-ods-operator
+  displayName: Red Hat OpenShift AI
+
+operatorGroup:
+  name: rhods-operator
+
+# --- Copy-paste overrides (optional): set both channel and startingCSV, or use olmProfile above.
+# GA stable 3.3.x:
+# channel: stable-3.x
+# startingCSV: rhods-operator.3.3.2
+#
+# 3.4 early access (beta channel):
+# channel: beta
+# startingCSV: rhods-operator.3.4.0-ea.2

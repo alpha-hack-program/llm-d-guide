@@ -138,6 +138,26 @@ S3-compatible object storage is needed for Pipelines, Model Registry, and model 
 * Hugging Face token (`HF_TOKEN`) for downloading gated model weights used with llm-d and MaaS.
 * Red Hat pull secret (from [console.redhat.com](https://console.redhat.com)).
 
+### 2.5 RHOAI operator version (stable 3.x vs 3.x early access)
+
+The **Red Hat OpenShift AI operator** is installed from OperatorHub via a Subscription. This repository ships a Helm chart at `gitops/operators/rhoai` so you can pick the OLM **channel** and **startingCSV** without editing YAML by hand.
+
+| Goal | OLM channel | Example `startingCSV` |
+| --- | --- | --- |
+| GA stable 3.3.x (default for this guide) | `stable-3.x` | `rhods-operator.3.3.2` |
+| 3.4 early access | `beta` | `rhods-operator.3.4.ea2` |
+
+Early access builds are published on the **beta** channel; GA releases use **stable-3.x**. Pin the CSV you want with `startingCSV` so upgrades are predictable.
+
+Set **`RHOAI_OLM_PROFILE`** when rendering the operator chart (defaults to stable if unset):
+
+| `RHOAI_OLM_PROFILE` | Effect |
+| --- | --- |
+| `stable` (default) | `channel: stable-3.x`, `startingCSV: rhods-operator.3.3.2` |
+| `ea` | `channel: beta`, `startingCSV: rhods-operator.3.4.ea2` |
+
+You can instead edit `gitops/operators/rhoai/values.yaml` (`olmProfile` or explicit `channel` / `startingCSV`) or pass `--set olmProfile=ea` to `helm template`.
+
 ---
 
 ## 3. Prerequisite Operators
@@ -337,83 +357,57 @@ oc get certificates.cert-manager.io --all-namespaces \
   -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,STATUS:.status.conditions[0].type,READY:.status.conditions[0].status'
 ```
 
+> **Note (direct helm apply):** The first `helm template gitops/operators/cert-manager-operator | oc apply -f -` will fail on the `CertManager` CR because the operator CRD is not registered until the CSV reaches `Succeeded`. Wait for the CSV, then re-run the command — it applies cleanly on the second pass.
+
 ### 3.2 GPU and Hardware Dependencies
 
-| Operator | Channel | Purpose |
-| --- | --- | --- |
-| Node Feature Discovery (NFD) Operator | `stable` | Detects GPU hardware capabilities |
-| NVIDIA GPU Operator | `stable` (latest) | GPU device plugin, drivers, DCGM |
+| Operator | Channel | Source | Purpose |
+| --- | --- | --- | --- |
+| Node Feature Discovery (NFD) Operator | `stable` | `redhat-operators` | Detects GPU hardware capabilities |
+| NVIDIA GPU Operator | `v26.3` (latest) | `certified-operators` | GPU device plugin, drivers, DCGM |
 
-Install NFD first, then the NVIDIA GPU Operator, via `Ecosystem / Software Catalog`.
+#### Installing the operators
 
-> **Note:** The NVIDIA GPU Operator channel changes with each release. Always select the latest `stable` channel from OperatorHub rather than pinning to a specific version.
+**Option A — CLI (recommended):**
 
-Create the required NodeFeatureDiscovery custom resource:
+Each directory contains an `install.sh` script that queries `oc get packagemanifest` at runtime to resolve the current default channel and CSV, so the manifests stay valid across OCP releases.
 
-**EXAMPLE, don't create manually, keep reading:**
-
-```yaml
-apiVersion: nfd.openshift.io/v1
-kind: NodeFeatureDiscovery
-metadata:
-  name: nfd-instance
-  namespace: openshift-nfd
-spec:
-  operand:
-    image: registry.redhat.io/openshift4/ose-node-feature-discovery-rhel9
-    imagePullPolicy: Always
-  workerConfig:
-    configData: |
-      core:
-        sleepInterval: 60s
-      sources:
-        pci:
-          deviceClassWhitelist:
-            - "0200"
-            - "03"
-            - "12"
-          deviceLabelFields:
-            - vendor
-```
-
-Create the ClusterPolicy custom resource:
-
-**EXAMPLE, don't create manually, keep reading:**
-
-```yaml
-apiVersion: nvidia.com/v1
-kind: ClusterPolicy
-metadata:
-  name: gpu-cluster-policy
-spec:
-  operator:
-    defaultRuntime: crio
-  driver:
-    enabled: true
-  toolkit:
-    enabled: true
-  devicePlugin:
-    enabled: true
-  dcgm:
-    enabled: true
-  dcgmExporter:
-    enabled: true
-  validator:
-    enabled: true
-  mig:
-    strategy: single  # or 'mixed' if using MIG partitioning
-```
-
-Apply using kustomize:
+Install NFD first, wait for it to be ready, then install the NVIDIA GPU operator:
 
 ```bash
+# 1. Install NFD operator (resolves channel + CSV dynamically)
+bash gitops/operators/nfd/install.sh
+oc get csv -n openshift-nfd -w | grep nfd
+
+# Wait for NFD CSV to reach Succeeded
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
+  -n openshift-nfd -l operators.coreos.com/nfd.openshift-nfd= --timeout=300s
+
+# 2. Install NVIDIA GPU operator (resolves channel + CSV dynamically)
+bash gitops/operators/nvidia/install.sh
+oc get csv -n nvidia-gpu-operator -w | grep gpu-operator
+```
+
+**Option B — OpenShift Console:**
+
+Go to **Operators → OperatorHub**, search for each operator by name, and install with the channel and namespace shown in the table above.
+
+#### Applying the instance CRs
+
+Once both operator CSVs are `Succeeded`, create the `NodeFeatureDiscovery` and `ClusterPolicy` custom resources:
+
+```bash
+# Apply NFD instance (NodeFeatureDiscovery CR)
 oc apply -k gitops/instance/nfd
+
+# Wait for NFD labels to appear on nodes before applying ClusterPolicy
+oc wait --for=condition=Established crd/nodefeaturediscoveries.nfd.openshift.io --timeout=120s
+
+# Apply NVIDIA instance (ClusterPolicy CR)
 oc apply -k gitops/instance/nvidia
 ```
 
 See: [NVIDIA GPU Operator on Red Hat OpenShift Container Platform](https://docs.nvidia.com/datacenter/cloud-native/openshift/latest/index.html)
-
-TODO Add some tests to verify that NVIDIA related labels are added to the GPU nodes.
 
 #### Adding A10G GPU nodes in AWS with MachineSets
 
@@ -471,12 +465,24 @@ oc wait --for=condition=Established crd/leaderworkersetoperators.operator.opensh
 oc get csv -n openshift-lws-operator -w | grep -E "leader-worker-set"
 
 # 3. Red Hat OpenShift AI Operator
-oc apply -k gitops/operators/rhoai
+# Choose olmProfile: "stable" (GA, stable-3.x) or "ea" (Early Access, beta channel).
+# Before applying, verify startingCSV matches the live packagemanifest:
+#   oc get packagemanifest rhods-operator -n openshift-marketplace \
+#     -o jsonpath='{.status.channels[?(@.name=="<channel>")].currentCSV}'
+# If you need to switch channels after a first install, delete the Subscription and CSV first:
+#   oc delete subscription rhods-operator -n redhat-ods-operator
+#   oc delete csv <previous-csv> -n redhat-ods-operator
+RHOAI_OLM_PROFILE="${RHOAI_OLM_PROFILE:-stable}"
+helm template rhoai-operator ./gitops/operators/rhoai \
+  --set olmProfile="${RHOAI_OLM_PROFILE}" | oc apply -f -
 oc get csv -n redhat-ods-operator -w | grep -E "rhods"
 
 # 4. Configure OpenShift AI (DSCInitialization and DataScienceCluster)
 oc wait --for=condition=Established crd/dashboards.components.platform.opendatahub.io --timeout=600s
-# Render and apply (chart emits resources across multiple namespaces)
+# Render and apply (chart emits resources across multiple namespaces).
+# Note: OdhDashboardConfig CRD may not be ready on the first pass. If the apply fails on
+# OdhDashboardConfig, wait for the CRD and re-run:
+#   oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io --timeout=120s
 helm template rhoai ./gitops/instance/rhoai | oc apply -f -
 
 # Wait for LLMInferenceService CRD and controller pods

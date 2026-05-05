@@ -1,8 +1,11 @@
 # AGENTS.md — llm-d-demo Co-pilot Runbook
 
-This file gives Claude Code persistent context for installing RHOAI 3.3 with llm-d
-on OpenShift 4.20. Work through one phase per session. Always tell Claude which
-phase you are on and paste any relevant error output before asking for help.
+This file gives assistants (Claude Code, OpenCode, Cursor, and compatible tools) persistent
+context for installing **Red Hat OpenShift AI 3.3** (self-managed) with **llm-d** on
+**OpenShift Container Platform 4.20**. The canonical, step-by-step manual is [`README.md`](README.md);
+use this runbook for phased execution, wait conditions, and human gates. Work through one phase
+per session. Always tell the assistant which phase you are on and paste any relevant error output
+before asking for help.
 
 ---
 
@@ -13,9 +16,13 @@ llm-d-guide/
 ├── gitops/
 │   ├── operators/
 │   │   ├── connectivity-link/       # Authorino + Limitador (Kuadrant stack)
+│   │   ├── cert-manager-operator/   # cert-manager subscription (GitOps / Helm)
+│   │   ├── cert-manager-route53/    # Let's Encrypt ClusterIssuers + Ingress/API certs
+│   │   ├── nfd/                     # Node Feature Discovery operator subscription
+│   │   ├── nvidia/                  # NVIDIA GPU Operator subscription
 │   │   ├── leader-worker-set/       # LeaderWorkerSet operator (required for llm-d)
 │   │   ├── kueue-operator/          # Red Hat Build of Kueue (OPTIONAL — only for GPUaaS/distributed workloads)
-│   │   ├── rhoai/                   # RHOAI operator subscription
+│   │   ├── rhoai/                   # RHOAI operator OLM subscription (Helm — channel/CSV presets)
 │   │   ├── tempo-operator/          # Distributed tracing
 │   │   ├── opentelemetry-operator/  # OTel collector
 │   │   ├── grafana-operator/        # Optional dashboards
@@ -42,11 +49,11 @@ llm-d-guide/
 
 | Operator | llm-d | GPUaaS / Distributed Workloads | Notes |
 |---|---|---|---|
+| **Connectivity Link** (Authorino + Limitador) | ✅ Required | ✅ Required | KServe auth, llm-d gateway, MaaS; Authorino is the token-auth piece |
 | **LeaderWorkerSet** | ✅ Required | ✅ Required | Multi-node MoE and P/D disaggregation |
-| **Connectivity Link** (Authorino + Limitador) | ✅ Required | ✅ Required | KServe auth + MaaS |
 | **Red Hat Build of Kueue** | ❌ Not required | ✅ Required | Do NOT install for llm-d-only setups — causes namespace label conflicts |
 | **NFD + NVIDIA GPU Operator** | ✅ Required | ✅ Required | GPU node detection and drivers |
-| **cert-manager** | ✅ Required | ✅ Required | TLS lifecycle |
+| **cert-manager** (Operator for Red Hat OpenShift) | ✅ Recommended | ✅ Recommended | Automates TLS for RHOAI, llm-d, OTel, and related components; manual certs are valid if you manage them yourself |
 
 > ⚠️ **Important:** Installing the Kueue operator (even with `managementState: Removed` in the DSC)
 > causes the RHOAI dashboard to label every new project with `kueue.openshift.io/managed=true`.
@@ -57,18 +64,20 @@ llm-d-guide/
 
 ## Environment Variables
 
-Collect these before starting. Claude will ask for any that are missing.
+Collect these before starting. The assistant should ask for any that are missing.
 
 | Variable | Description | Example |
 |---|---|---|
-| `CLUSTER_DOMAIN` | Auto-detected via `oc get dns.config/cluster` | `apps.mycluster.example.com` |
-| `AWS_REGION` | AWS region for MachineSets and Route53 | `eu-west-1` |
+| `CLUSTER_DOMAIN` | Cluster DNS base domain: from `oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}'` (cert-manager / Route53 flows in README) | `apps.mycluster.example.com` |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | AWS region for GPU MachineSets (`AWS_REGION`) and Let's Encrypt Route53 issuer (`AWS_DEFAULT_REGION` in README examples) | `eu-west-1` |
 | `AWS_INSTANCE_TYPE` | GPU instance type | `g5.2xlarge` |
 | `AMI_ID` | RHCOS AMI for the GPU nodes | `ami-0b8c325b7499597c6` |
 | `AWS_INSTANCES_PER_AZ` | GPU nodes per availability zone | `1` |
+| `INFRA_ID` | OpenShift infrastructure name for AWS MachineSet chart (`oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}'`) | `mycluster-abcd123` |
 | `HF_TOKEN` | HuggingFace token for gated models | `hf_...` |
 | `GATEWAY_NAME` | Name for the llm-d gateway | `openshift-ai-inference` |
 | `PROJECT` | Namespace for llm-d workloads | `llm-d-demo` |
+| `RHOAI_OLM_PROFILE` | RHOAI **operator** install preset: `stable` (default) = `stable-3.x`; `ea` = `beta` channel. Verify current CSV via `packagemanifest` before use. Passed to `helm template ./gitops/operators/rhoai --set olmProfile=...` | `stable` |
 
 ---
 
@@ -89,7 +98,7 @@ Collect these before starting. Claude will ask for any that are missing.
 
 **Goal:** Confirm the cluster is ready before installing anything.
 
-**Claude should run these checks and report any failures:**
+**The assistant should run these checks and report any failures:**
 
 ```bash
 # OCP version — must be 4.20+
@@ -105,8 +114,10 @@ oc get storageclass | grep '(default)'
 # No ODH installed (must be absent)
 oc get csv -A | grep -i opendatahub
 
-# No Service Mesh 2.x installed (must be absent; SM3 is OK)
+# No Service Mesh 2.x installed (must be absent). SM 3.x is only for Llama Stack, not llm-d.
 oc get csv -A | grep -i servicemeshoperator | grep -v servicemeshoperator3
+
+# Connected clusters: plan outbound access to registry.redhat.io and quay.io (or mirrors)
 
 # DNS base domain
 oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}'
@@ -125,10 +136,9 @@ oc get secret pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfig
 **Goal:** Install the GitOps operator and automate TLS certificate lifecycle.
 
 **Install order:**
-1. Red Hat OpenShift GitOps (ArgoCD) — via OperatorHub UI or CLI
-2. RBAC for cert-manager (`oc apply -f -` the ClusterRole/Binding from README §3.1)
-3. cert-manager operator via ArgoCD Application
-4. Let's Encrypt ClusterIssuers + certificates for Ingress and API
+1. *(Optional)* Red Hat OpenShift GitOps (ArgoCD) — via OperatorHub UI or CLI. Not required if applying manifests directly with `helm template | oc apply`.
+2. cert-manager operator — `helm template gitops/operators/cert-manager-operator --set cloud=aws | oc apply -f -` (AWS) or `cloud=none` (bare metal). ArgoCD `Application` path documented in README section 3.1 as an alternative.
+3. Let's Encrypt ClusterIssuers + certificates for Ingress and API — `helm template gitops/operators/cert-manager-route53 --set clusterDomain=<apps-domain> --set route53.region=<region> | oc apply -f -`
 
 **Key wait condition:**
 ```bash
@@ -136,14 +146,16 @@ oc get secret pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfig
 oc get pods -n cert-manager
 # controller, cainjector, webhook — all must show 1/1 Running
 
-# Then verify certificates
+# Then verify certificates (README section 3.1 uses STATUS + READY columns)
 oc get certificates.cert-manager.io --all-namespaces \
-  -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.conditions[0].status'
+  -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,STATUS:.status.conditions[0].type,READY:.status.conditions[0].status'
 ```
 
 **Human gate:** Every certificate must show `READY=True`. Do not proceed with a cert in `False` or `Unknown` state.
 
-**Known gotcha:** If cert-manager webhook is slow to start, ArgoCD sync may fail on the first attempt. Re-sync the ArgoCD application after all 3 pods are Running.
+**Known gotchas:**
+- The first `helm template | oc apply` will fail on the `CertManager` CR because the operator CRD isn't registered until the CSV reaches `Succeeded`. Wait for `Succeeded`, then re-run the same command — it applies cleanly on the second pass.
+- If using ArgoCD: if the cert-manager webhook is slow to start, the ArgoCD sync may fail on the first attempt. Re-sync after all 3 pods are Running.
 
 ---
 
@@ -152,9 +164,11 @@ oc get certificates.cert-manager.io --all-namespaces \
 **Goal:** Add GPU worker nodes and install the hardware detection and driver stack.
 
 **Install order:**
-1. Node Feature Discovery (NFD) operator + `NodeFeatureDiscovery` CR (`oc apply -k gitops/instance/nfd`)
-2. NVIDIA GPU Operator + `ClusterPolicy` CR (`oc apply -k gitops/instance/nvidia`)
-3. GPU MachineSets (AWS only — use the Helm chart in `gitops/instance/machine-sets/gpu-worker`)
+1. NFD operator — `bash gitops/operators/nfd/install.sh` (dynamically resolves channel + CSV from `packagemanifest`; or via OperatorHub: search "Node Feature Discovery", namespace `openshift-nfd`)
+2. NVIDIA GPU Operator — `bash gitops/operators/nvidia/install.sh` (dynamically resolves channel + CSV; or via OperatorHub: search "NVIDIA GPU Operator", namespace `nvidia-gpu-operator`)
+3. `NodeFeatureDiscovery` CR — `oc apply -k gitops/instance/nfd` (after NFD CSV is `Succeeded`)
+4. `ClusterPolicy` CR — `oc apply -k gitops/instance/nvidia` (after NVIDIA CSV is `Succeeded`)
+5. GPU MachineSets (AWS only — use the Helm chart in `gitops/instance/machine-sets/gpu-worker`)
 
 **Key wait conditions:**
 ```bash
@@ -187,7 +201,7 @@ oc get nodes -o json | jq '.items[].status.capacity | select(."nvidia.com/gpu")'
 **Install order (sequence matters):**
 
 ```
-connectivity-link  →  leader-worker-set  →  rhoai operator
+connectivity-link  →  leader-worker-set  →  helm template rhoai-operator (OLM subscription)
        ↓
   (wait for CRDs)
        ↓
@@ -196,16 +210,29 @@ connectivity-link  →  leader-worker-set  →  rhoai operator
   (wait for controller pods)
 ```
 
+**Human gate — RHOAI channel:** Before installing the RHOAI operator, ask the user which OLM profile to use:
+- `stable` — GA release on `stable-3.x` (default)
+- `ea` — Early Access on `beta` channel
+
+Verify the `startingCSV` in `gitops/operators/rhoai/values.yaml` matches the live packagemanifest before applying:
+```bash
+oc get packagemanifest rhods-operator -n openshift-marketplace \
+  -o jsonpath='{.status.channels[?(@.name=="<channel>")].currentCSV}'
+```
+Then apply: `helm template rhoai-operator gitops/operators/rhoai --set olmProfile=<stable|ea> | oc apply -f -`
+
 **Key wait conditions:**
 ```bash
 # Connectivity Link — AuthPolicy CRD must exist before RHOAI
 oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
 
-# LeaderWorkerSet CRD — required for llm-d multi-node deployments
+# Leader Worker Set — README applies with `until oc apply -k ./gitops/operators/leader-worker-set`
+# Operator CRD (subscription/CSV in openshift-lws-operator); workload CRD for LWS objects:
+oc wait --for=condition=Established crd/leaderworkersetoperators.operator.openshift.io --timeout=300s
 oc wait --for=condition=Established crd/leaderworkersets.leaderworkerset.x-k8s.io --timeout=300s
 
-# RHOAI Dashboard CRD
-oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io --timeout=600s
+# RHOAI — wait before `helm template rhoai ./gitops/instance/rhoai | oc apply -f -`
+oc wait --for=condition=Established crd/dashboards.components.platform.opendatahub.io --timeout=600s
 
 # After applying the DataScienceCluster:
 oc wait --for=condition=Established crd/llminferenceservices.serving.kserve.io --timeout=300s
@@ -304,7 +331,6 @@ metadata:
   namespace: redhat-ods-applications
   annotations:
     opendatahub.io/display-name: "Default CPU (Kueue)"
-    opendatahub.io/dashboard-feature-visibility: '["workbench","modelServer"]'
     opendatahub.io/disabled: "false"
 spec:
   identifiers:
@@ -331,7 +357,7 @@ EOF
 > when `disableKueue` is changed in `OdhDashboardConfig`. The dashboard keeps labeling new projects
 > with `kueue.openshift.io/managed=true` until it is restarted (`oc rollout restart deployment/rhods-dashboard`).
 > Even after restart, the label may persist if the dashboard's internal cache is not cleared.
-> Workaround: always create namespaces via `oc new-project` (see below).
+> Workaround: create namespaces via `oc new-project` when you need to avoid dashboard labelling issues (see below).
 
 **Creating projects for llm-d workloads:**
 
@@ -344,19 +370,35 @@ while the dashboard is reloading its config, you can create namespaces directly 
 # TEMPORARY WORKAROUND — only if the dashboard is still labeling projects with
 # kueue.openshift.io/managed=true after setting disableKueue: true and restarting
 oc new-project <project-name>
-oc label namespace <project-name> opendatahub.io/dashboard=true
+oc label namespace <project-name> modelmesh-enabled=false opendatahub.io/dashboard=true
+```
+
+### Optional — OpenShift Pipelines (Data Science Pipelines only)
+
+> ℹ️ Skip if you only need llm-d inference. Install when using **Data Science Pipelines** in RHOAI.
+
+```bash
+oc apply -k gitops/operators/pipelines
+# InstallPlan may require manual approval (wait for the InstallPlan to appear):
+INSTALLPLAN_NAME=$(oc get installplan -n openshift-operators -o json | \
+  jq -r '.items[] | select(.spec.clusterServiceVersionNames[]? | contains("openshift-pipelines-operator-rh")) | .metadata.name')
+oc patch installplan "$INSTALLPLAN_NAME" -n openshift-operators \
+  --type merge --patch '{"spec":{"approved":true}}'
+oc get csv -n openshift-operators -w | grep -E "pipelines"
 ```
 
 **Human gates:**
-- **InstallPlan approvals:** Some operators require manual approval. Claude will check and list pending plans, but you must confirm before Claude patches them.
+- **InstallPlan approvals:** Some operators require manual approval. The assistant should check and list pending plans, but you must confirm before it patches them.
 - **CSV verification:** Run `./scripts/check-operators.sh` at the end. All required operators must be `Succeeded` before proceeding.
 
 **Known gotchas:**
 - Apply connectivity-link first — Authorino must be running before RHOAI configures authentication.
 - `helm template rhoai | oc apply` may fail if CRDs aren't established yet. The wait commands above prevent this, but re-run them if you hit `resource mapping not found`.
+- `helm template rhoai | oc apply` may also fail on `OdhDashboardConfig` on the first pass — the CRD is registered only after the Dashboard component initialises. Wait for `oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io` and re-run.
+- Switching RHOAI channel in-place (patching the Subscription) is unreliable. If you need to change channels, delete the Subscription and CSV first, then re-apply with the new `olmProfile`.
 - Leader Worker Set uses a retry loop (`until oc apply -k ...`) to handle install race conditions — this is expected behaviour, not an error.
-- Do NOT install OpenShift Service Mesh 2.x — its CRDs conflict with the llm-d gateway.
-- Serverless operator is NOT required for RHOAI 3.x.
+- Do NOT install OpenShift Service Mesh 2.x — its CRDs conflict with the llm-d gateway. Service Mesh 3.x is only for **Llama Stack Operator**; it is not required for base RHOAI or llm-d.
+- Serverless operator is NOT required for RHOAI 3.x (raw KServe deployment mode).
 
 ---
 
@@ -365,13 +407,16 @@ oc label namespace <project-name> opendatahub.io/dashboard=true
 **Goal:** Install Tempo (tracing), OpenTelemetry (collector), and Grafana (dashboards).
 
 **Install order:**
-1. Tempo Operator
-2. OpenTelemetry Operator
-3. Grafana Operator (optional)
+1. Tempo Operator (`gitops/operators/tempo-operator`)
+2. OpenTelemetry Operator (`gitops/operators/opentelemetry-operator`)
+3. Grafana Operator (`gitops/operators/grafana-operator`, optional dashboards)
 
 ```bash
-# All three can be applied in sequence; wait for CRDs between them
+# README section 3.3 monitoring substeps — apply in order; watch CSVs until Succeeded
+oc apply -k gitops/operators/tempo-operator
+oc apply -k gitops/operators/opentelemetry-operator
 oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
+oc apply -k gitops/operators/grafana-operator
 ```
 
 **Human gate:** Optional. Confirm Grafana route is accessible if you want dashboards during llm-d testing.
@@ -382,7 +427,7 @@ oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --time
 
 **Goal:** Deploy the gateway, a namespace, and an LLMInferenceService, then test the endpoint.
 
-**Pre-flight checks Claude must run before starting:**
+**Pre-flight checks the assistant must run before starting:**
 ```bash
 # LLMInferenceService CRD available
 oc get crd llminferenceservices.serving.kserve.io
@@ -400,29 +445,34 @@ oc get pods -n redhat-ods-applications \
 ./scripts/check-operators.sh
 ```
 
-**Steps:** Follow README Quick Start §1–6 exactly. Claude will:
-1. Detect `CLUSTER_DOMAIN` automatically
-2. Generate the helm template commands with your env vars filled in
-3. Apply and watch pod status
-4. Run the `curl` tests and show you the response
+**Steps:** Follow README **Quick Start** (Steps 1–6: Gateway, namespace, LLMInferenceService, verify, curl tests, optional monitoring). The assistant should:
+1. Set gateway **`clusterDomain`** from `oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}'` (README Step 1 — apps ingress domain), not from `dns.config` unless you intentionally unify them
+2. **Gateway TLS:** if Let's Encrypt `ingress-certs` already exists in `openshift-ingress` (Phase 1 complete), use `--set tls.secretName=ingress-certs` — no need to generate a new cert
+3. Create the workload namespace with `modelmesh-enabled=false` and `opendatahub.io/dashboard=true` (README Step 2)
+4. **Ask the user which model/storage type to deploy** before generating the inference chart: OCI (`registry.redhat.io/rhelai1/...` — no HF token needed, pull secret must include `registry.redhat.io`) or HuggingFace (requires `HF_TOKEN` for gated models)
+5. Generate `helm template` / `oc apply` for gateway and inference with your env vars
+6. Apply and watch pod / `LLMInferenceService` status
+7. Run the README `curl` tests (models, completions, chat completions) and show the response
+8. Optionally apply `gitops/instance/llm-d-monitoring` per README Step 6
 
-**Human gate:** Review the chat completion response from Step 5. If the model returns a coherent answer, the deployment is successful.
+**Human gate:** Review the chat completion response from the Quick Start test step. If the model returns a coherent answer, the deployment is successful.
 
 **Known gotchas:**
 - If the Gateway is not `PROGRAMMED=True`, check that Connectivity Link / Authorino is Running and the `GatewayClass` CR was created.
 - If the LLMInferenceService is stuck `Not Ready`, describe it: `oc describe llminferenceservice <name> -n <namespace>` and check events.
 - For OCI model images (`registry.redhat.io/rhelai1/...`), ensure the cluster pull secret includes Red Hat registry credentials.
 - For MoE models (DeepSeek-R1, Mixtral), use the **Wide Expert-Parallelism** well-lit path which requires LeaderWorkerSet for multi-node orchestration.
+- **Model Registry / model-catalog API 500:** If migrations did not apply, restart model-catalog: `oc rollout restart deployment/model-catalog -n rhoai-model-registries` (README Appendix B).
 
 ---
 
 ## How to Start a Session
 
-At the beginning of each Claude Code session, say:
+At the beginning of each session, say which tool you use and your phase, for example:
 
-> *"I'm on Phase \<N\>. Here are my env vars: AWS_REGION=... AWS_INSTANCE_TYPE=... [etc.] Let's continue."*
+> *"I'm on Phase \<N\> (agent). My env vars: AWS_REGION=... AWS_INSTANCE_TYPE=... [etc.]. Let's continue."*
 
-If something went wrong in a previous session, paste the error output and say which command failed. Claude will diagnose before continuing.
+If something went wrong, paste the failing command and its output and say which phase you were on. The assistant should diagnose without restarting from scratch.
 
 ---
 
@@ -464,12 +514,12 @@ oc get resourceflavor
 
 ---
 
-## Constraints and Rules for Claude
+## Constraints and Rules for the assistant
 
 - **Never skip a wait condition** between phases. Timing errors are the most common failure mode.
 - **Always check `check-operators.sh`** before starting Phase 5.
 - **Always stop and ask** before patching an InstallPlan or applying anything that modifies cluster-wide RBAC.
-- **Never install** Service Mesh 2.x, OpenShift Serverless, or Open Data Hub — these conflict with RHOAI 3.x.
+- **Never install** Service Mesh 2.x, OpenShift Serverless, or Open Data Hub — these conflict with RHOAI 3.x. Service Mesh 3.x is only in scope if the user explicitly deploys **Llama Stack Operator** (not part of the default llm-d path).
 - **Do NOT install Kueue** unless explicitly required for GPUaaS or distributed workloads — it causes namespace label conflicts with hardware profiles.
-- **Prefer `oc apply -k`** over raw `oc apply -f` for kustomize paths — it respects the overlay ordering.
+- **Prefer `oc apply -k`** over raw `oc apply -f` for kustomize paths — it respects the overlay ordering. The RHOAI **operator** install is an exception: use `helm template rhoai-operator ./gitops/operators/rhoai | oc apply -f -` (see README §2.5).
 - If a command produces unexpected output, **stop and report** rather than continuing.

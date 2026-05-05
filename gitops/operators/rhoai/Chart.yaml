@@ -1,0 +1,11 @@
+apiVersion: v2
+name: rhoai-operator
+description: Red Hat OpenShift AI operator — OLM Namespace, OperatorGroup, and Subscription
+type: application
+version: 0.1.0
+appVersion: "3.3"
+keywords:
+  - openshift
+  - rhods
+  - rhoai
+  - opendatahub
