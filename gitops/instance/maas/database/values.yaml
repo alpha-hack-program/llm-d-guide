@@ -1,0 +1,28 @@
+db:
+  name: maas
+  user: maas
+  # Password for the PostgreSQL instance and the maas-db-config secret.
+  # Priority:
+  #   1. This value (if non-empty) — use for ArgoCD or when an explicit password is required.
+  #   2. Existing maas-db-config secret in the cluster — reused on helm upgrade (lookup).
+  #   3. Auto-generated random 24-char password — on first helm install only.
+  #
+  # NOTE: lookup is skipped by ArgoCD (helm template mode). Set db.password explicitly
+  # when deploying via ArgoCD, or pre-create the secret outside the chart.
+  password: ""
+  # PostgreSQL service name and port.
+  service:
+    name: maas-db
+    port: 5432
+  # Name of the Secret that maas-api reads for the DB connection URL.
+  secretName: maas-db-config
+
+image: registry.redhat.io/rhel9/postgresql-16:latest
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"

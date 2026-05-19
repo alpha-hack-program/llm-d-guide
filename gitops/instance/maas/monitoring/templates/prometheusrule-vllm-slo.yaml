@@ -1,0 +1,47 @@
+{{- if .Values.vllm.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: maas-vllm-slo
+  namespace: {{ .Values.vllm.modelNamespace }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  groups:
+    - name: maas-vllm-slo
+      rules:
+        - alert: MaaSHighP99Latency
+          expr: |
+            histogram_quantile(0.99,
+              sum by(le, model_name) (
+                rate(kserve_vllm:e2e_request_latency_seconds_bucket[5m])
+              )
+            ) > 30
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "vLLM P99 latency exceeds 30s"
+            description: "Model {{`{{ $labels.model_name }}`}} P99 e2e latency is {{`{{ $value | humanizeDuration }}`}}."
+
+        - alert: MaaSKVCacheNearFull
+          expr: kserve_vllm:gpu_cache_usage_perc > 0.9
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "vLLM KV cache utilization above 90%"
+            description: "Model {{`{{ $labels.model_name }}`}} GPU cache is at {{`{{ $value | humanizePercentage }}`}}."
+
+        - alert: MaaSHighErrorRate
+          expr: |
+            sum by(model_name) (
+              rate(kserve_vllm:request_success_total{finished_reason="error"}[5m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "vLLM is returning errors"
+            description: "Model {{`{{ $labels.model_name }}`}} has error rate of {{`{{ $value }}`}} req/s."
+{{- end }}

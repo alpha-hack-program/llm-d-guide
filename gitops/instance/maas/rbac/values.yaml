@@ -1,0 +1,23 @@
+# Tier definitions — must stay in sync with the tier-to-group-mapping ConfigMap
+# that RHOAI auto-creates in redhat-ods-applications.
+# This chart only creates the OpenShift Group objects; it does not manage that ConfigMap.
+#
+# Groups whose name starts with "system:" are built-in OpenShift groups and are skipped.
+# All other group names get an OpenShift Group resource created with helm.sh/resource-policy: keep,
+# so that manually added members are preserved across helm upgrades and uninstalls.
+tiers:
+  - name: free
+    groups:
+      - system:authenticated  # built-in — skipped
+      - tier-free-users
+
+  - name: premium
+    groups:
+      - tier-premium-users
+      - premium-group
+
+  - name: enterprise
+    groups:
+      - tier-enterprise-users
+      - enterprise-group
+      - admin-group

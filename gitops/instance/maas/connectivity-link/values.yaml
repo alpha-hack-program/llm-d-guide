@@ -1,0 +1,7 @@
+# Namespace where the Kuadrant CR and its operands (Authorino, Limitador) are deployed.
+# The RHCL operator watches all namespaces, so this can be any namespace.
+# kuadrant-system is the conventional name used in the upstream MaaS docs.
+namespace: kuadrant-system
+
+kuadrant:
+  name: kuadrant

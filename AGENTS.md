@@ -1,8 +1,8 @@
 # AGENTS.md — llm-d-demo Co-pilot Runbook
 
 This file gives assistants (Claude Code, OpenCode, Cursor, and compatible tools) persistent
-context for installing **Red Hat OpenShift AI 3.3** (self-managed) with **llm-d** on
-**OpenShift Container Platform 4.20**. The canonical, step-by-step manual is [`README.md`](README.md);
+context for installing **Red Hat OpenShift AI 3.4** (self-managed) with **llm-d** on
+**OpenShift Container Platform 4.21**. The canonical, step-by-step manual is [`README.md`](README.md);
 use this runbook for phased execution, wait conditions, and human gates. Work through one phase
 per session. Always tell the assistant which phase you are on and paste any relevant error output
 before asking for help.
@@ -35,7 +35,13 @@ llm-d-guide/
 │       ├── llm-d/
 │       │   ├── gateway/             # GatewayClass + Gateway Helm chart
 │       │   └── inference/           # LLMInferenceService Helm chart
-│       └── llm-d-monitoring/        # Prometheus + Grafana for llm-d metrics
+│       ├── llm-d-monitoring/        # Prometheus + Grafana for llm-d metrics
+│       └── maas/
+│           ├── connectivity-link/   # Kuadrant CR (kuadrant-system namespace + Kuadrant instance)
+│           ├── gateway/             # GatewayClass + maas-default-gateway Helm chart
+│           ├── rbac/                # OpenShift Groups for MaaS tier-based access control
+│           ├── database/            # MaaS API backing store
+│           └── monitoring/          # Grafana dashboards + Prometheus rules for MaaS
 ├── metallb/                         # MetalLB config (bare metal only)
 ├── scripts/
 │   ├── check-operators.sh           # Validates all required operators are Succeeded
@@ -49,7 +55,7 @@ llm-d-guide/
 
 | Operator | llm-d | GPUaaS / Distributed Workloads | Notes |
 |---|---|---|---|
-| **Connectivity Link** (Authorino + Limitador) | ✅ Required | ✅ Required | KServe auth, llm-d gateway, MaaS; Authorino is the token-auth piece |
+| **Connectivity Link** (Authorino + Limitador) | ✅ Required | ✅ Required | KServe auth, llm-d gateway, MaaS; Authorino is the token-auth piece. Installing the operator alone is not enough — a `Kuadrant` CR must also be created in `kuadrant-system` (`gitops/instance/maas/connectivity-link`) to deploy the actual operands. |
 | **LeaderWorkerSet** | ✅ Required | ✅ Required | Multi-node MoE and P/D disaggregation |
 | **Red Hat Build of Kueue** | ❌ Not required | ✅ Required | Do NOT install for llm-d-only setups — causes namespace label conflicts |
 | **NFD + NVIDIA GPU Operator** | ✅ Required | ✅ Required | GPU node detection and drivers |
@@ -91,6 +97,7 @@ Collect these before starting. The assistant should ask for any that are missing
 | 3 | Core operators + RHOAI | 20–30 min | Approve InstallPlans; CSVs `Succeeded` |
 | 4 | Monitoring stack | 10 min | Optional sign-off |
 | 5 | llm-d Quick Start | 15–20 min | Review curl test output |
+| 6 | MaaS — Gateway + Kuadrant CR + publish model | 10–15 min | Verify `LLMInferenceService` `Ready: True` via MaaS route |
 
 ---
 
@@ -101,7 +108,7 @@ Collect these before starting. The assistant should ask for any that are missing
 **The assistant should run these checks and report any failures:**
 
 ```bash
-# OCP version — must be 4.20+
+# OCP version — must be 4.21+
 oc version
 
 # Cluster admin access
@@ -393,6 +400,7 @@ oc get csv -n openshift-operators -w | grep -E "pipelines"
 
 **Known gotchas:**
 - Apply connectivity-link first — Authorino must be running before RHOAI configures authentication.
+- After the RHCL operator is ready, create the Kuadrant CR: `helm template gitops/instance/maas/connectivity-link --name-template maas-connectivity-link | oc apply -f -`. Without this CR, Authorino and Limitador pods are not deployed and MaaS auth/rate-limiting is silently unenforced. If the CR stays `Ready: False` with `MissingDependency (istio/envoy gateway)` on OCP 4.19+, delete and restart the operator pod — it will detect the OCP built-in Gateway API on the next start.
 - `helm template rhoai | oc apply` may fail if CRDs aren't established yet. The wait commands above prevent this, but re-run them if you hit `resource mapping not found`.
 - `helm template rhoai | oc apply` may also fail on `OdhDashboardConfig` on the first pass — the CRD is registered only after the Dashboard component initialises. Wait for `oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io` and re-run.
 - Switching RHOAI channel in-place (patching the Subscription) is unreliable. If you need to change channels, delete the Subscription and CSV first, then re-apply with the new `olmProfile`.
@@ -460,6 +468,7 @@ oc get pods -n redhat-ods-applications \
 **Known gotchas:**
 - If the Gateway is not `PROGRAMMED=True`, check that Connectivity Link / Authorino is Running and the `GatewayClass` CR was created.
 - If the LLMInferenceService is stuck `Not Ready`, describe it: `oc describe llminferenceservice <name> -n <namespace>` and check events.
+- If `HTTPRoutesReady: False` with `NotAllowedByListeners`: the model namespace is missing from the MaaS gateway's `allowedRoutes`. Re-apply the gateway chart with `--set "gateway.modelNamespaces={<namespace>}"` (see README §9.2).
 - For OCI model images (`registry.redhat.io/rhelai1/...`), ensure the cluster pull secret includes Red Hat registry credentials.
 - For MoE models (DeepSeek-R1, Mixtral), use the **Wide Expert-Parallelism** well-lit path which requires LeaderWorkerSet for multi-node orchestration.
 - **Model Registry / model-catalog API 500:** If migrations did not apply, restart model-catalog: `oc rollout restart deployment/model-catalog -n rhoai-model-registries` (README Appendix B).
@@ -496,6 +505,13 @@ oc get gateway,httproute -n openshift-ingress
 
 # Active inference services
 oc get llminferenceservice -A
+
+# MaaS status
+oc get kuadrant -n kuadrant-system
+oc get pods -n kuadrant-system
+oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
+oc get authconfig -A | grep -v "^NAMESPACE"
+oc get gateway maas-default-gateway -n openshift-ingress
 
 # GPU node capacity
 oc get nodes -o custom-columns='NAME:.metadata.name,GPU:.status.capacity.nvidia\.com/gpu'

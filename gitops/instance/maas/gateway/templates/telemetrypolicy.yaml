@@ -1,0 +1,20 @@
+{{- if .Values.telemetry.enabled }}
+apiVersion: extensions.kuadrant.io/v1alpha1
+kind: TelemetryPolicy
+metadata:
+  name: maas-gateway-telemetry
+  namespace: {{ .Values.gateway.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ .Values.gateway.name }}
+  metrics:
+    default:
+      labels:
+        model: responseBodyJSON("/model")
+        tier: auth.identity.tier
+        user: auth.identity.userid
+{{- end }}

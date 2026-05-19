@@ -1,0 +1,169 @@
+{
+  "title": "vLLM Inference Metrics",
+  "uid": "maas-vllm-metrics",
+  "description": "vLLM model serving: token throughput, latency, scheduler, KV cache",
+  "tags": ["maas", "vllm", "llm", "inference"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "5s",
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": true, "text": "Prometheus", "value": "Prometheus" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "current": { "selected": false, "text": "", "value": "" },
+        "hide": 0,
+        "label": "Model Name",
+        "name": "model_name",
+        "options": [],
+        "query": "",
+        "type": "textbox"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Generation Token Throughput (TPS)",
+      "description": "Tokens generated per second",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum by(model_name) (rate(kserve_vllm:generation_tokens_total{model_name=~\"$model_name.*\"}[5m]))", "legendFormat": "{{model_name}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Prompt Token Throughput (TPS)",
+      "description": "Prompt tokens processed per second",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum by(model_name) (rate(kserve_vllm:prompt_tokens_total{model_name=~\"$model_name.*\"}[5m]))", "legendFormat": "{{model_name}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Scheduler State",
+      "description": "Requests running, waiting, or swapped",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "kserve_vllm:num_requests_running{model_name=~\"$model_name.*\"}", "legendFormat": "Running" },
+        { "refId": "B", "expr": "kserve_vllm:num_requests_waiting{model_name=~\"$model_name.*\"}", "legendFormat": "Waiting" },
+        { "refId": "C", "expr": "kserve_vllm:num_requests_swapped{model_name=~\"$model_name.*\"}", "legendFormat": "Swapped" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "stacking": { "mode": "normal" } } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "KV Cache Utilization",
+      "description": "GPU/CPU cache usage for attention caching",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "kserve_vllm:gpu_cache_usage_perc{model_name=~\"$model_name.*\"}", "legendFormat": "GPU Cache %" },
+        { "refId": "B", "expr": "kserve_vllm:cpu_cache_usage_perc{model_name=~\"$model_name.*\"}", "legendFormat": "CPU Cache %" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit", "min": 0, "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.9 }] }
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Processed Requests by Finish Reason",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "refId": "A", "expr": "sum by(finished_reason) (rate(kserve_vllm:request_success_total{model_name=~\"$model_name.*\"}[5m]))", "legendFormat": "{{finished_reason}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 6,
+      "type": "heatmap",
+      "title": "Request Prompt Length Distribution",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(kserve_vllm:request_prompt_tokens_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])) by (le)", "format": "heatmap", "legendFormat": "{{le}}" }
+      ],
+      "options": { "calculate": false, "color": { "scheme": "Oranges" }, "yAxis": { "unit": "short" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "E2E Request Latency",
+      "description": "End-to-end latency percentiles (p50, p90, p95, p99)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum by(le) (rate(kserve_vllm:e2e_request_latency_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P99" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by(le) (rate(kserve_vllm:e2e_request_latency_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P95" },
+        { "refId": "C", "expr": "histogram_quantile(0.90, sum by(le) (rate(kserve_vllm:e2e_request_latency_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P90" },
+        { "refId": "D", "expr": "histogram_quantile(0.50, sum by(le) (rate(kserve_vllm:e2e_request_latency_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P50" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Time To First Token (TTFT)",
+      "description": "How quickly the model starts responding",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum by(le) (rate(kserve_vllm:time_to_first_token_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P99" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by(le) (rate(kserve_vllm:time_to_first_token_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P95" },
+        { "refId": "C", "expr": "histogram_quantile(0.90, sum by(le) (rate(kserve_vllm:time_to_first_token_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P90" },
+        { "refId": "D", "expr": "histogram_quantile(0.50, sum by(le) (rate(kserve_vllm:time_to_first_token_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P50" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Time Per Output Token (TPOT)",
+      "description": "Inter-token latency during generation",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum by(le) (rate(kserve_vllm:time_per_output_token_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P99" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by(le) (rate(kserve_vllm:time_per_output_token_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P95" },
+        { "refId": "C", "expr": "histogram_quantile(0.50, sum by(le) (rate(kserve_vllm:time_per_output_token_seconds_bucket{model_name=~\"$model_name.*\"}[$__rate_interval])))", "legendFormat": "P50" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    }
+  ]
+}

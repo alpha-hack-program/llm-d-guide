@@ -19,8 +19,9 @@ spec:
   {{- toYaml .identifiers | nindent 4 }}
   {{- if .scheduling }}
   {{- $sched := .scheduling }}
+  {{- $kueueEnabled := $.Values.kueue | default false }}
   scheduling:
-  {{- if $sched.kueue }}
+  {{- if and $sched.kueue $kueueEnabled }}
     {{- $ks := $sched.kueue | default dict }}
     kueue:
       localQueueName: {{ $ks.localQueueName | default "default" | quote }}

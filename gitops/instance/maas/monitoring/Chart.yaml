@@ -1,0 +1,4 @@
+apiVersion: v2
+description: Monitoring resources for MaaS — ServiceMonitor, PodMonitor, PrometheusRules, and Grafana dashboards
+name: maas-monitoring
+version: 1.0.0

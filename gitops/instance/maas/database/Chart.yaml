@@ -1,0 +1,4 @@
+apiVersion: v2
+description: PostgreSQL database for maas-api (API key and subscription storage)
+name: maas-database
+version: 1.0.0

@@ -9,7 +9,7 @@ odhApplicationsNamespace: redhat-ods-applications
 
 # --- Feature toggles (drive component managementState and dashboard visibility) ---
 featureStore: false         # Feast operator
-modelsAsService: false      # KServe models-as-service
+modelsAsService: true      # KServe models-as-service
 distributedWorkloads: false # Distributed workloads
 kueue: false                 # Kueue operator
 llamaStack: true            # LlamaStack operator
@@ -93,6 +93,11 @@ hardwareProfiles:
         kueue:
           localQueueName: default
           priorityClass: "None"
+        node:
+          tolerations:
+            - effect: NoSchedule
+              key: nvidia.com/gpu
+              operator: Exists
     - name: nvidiaa10g-profile
       displayName: nvidia-a10g-profile
       description: "Provides a hardware profile for A10G GPUs with 1 GPU, 1 CPUs and 12Gi memory by default, adjustable up to 4 GPUs, 8 CPUs and 24Gi memory."

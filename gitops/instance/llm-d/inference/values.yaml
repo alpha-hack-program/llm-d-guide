@@ -7,17 +7,25 @@ deploymentType: intelligent-inference
 # startupProbe when useStartupProbe is true (gpt-oss-20b style). When false: full EPP scheduler.
 intelligentInferenceSimple: false
 
+# ── Hardware profile ──────────────────────────────────────────────────────────
+# Auto-selected based on gpuCount: "gpu-profile" when GPU, "default-cpu" otherwise.
+# Override name to force a specific profile.
+# Available profiles: gpu-profile, default-cpu, nvidia, nvidiaa10g-profile, default-profile
+hardwareProfile:
+  namespace: redhat-ods-applications
+  name: ""
+
 # ── Scheduler (EPP) TLS ───────────────────────────────────────────────────────
 # By default the EPP uses a self-signed certificate (--cert-path is not set).
 # To use your own TLS certificates (e.g. from cert-manager):
 #   1. Create a Secret with keys tls.crt and tls.key in the same namespace.
 #   2. Set schedulerTLS.enabled to true and schedulerTLS.secretName to that secret.
-# The EPP expects files named tls.crt and tls.key in the mount path (see GIE/llm-d docs).
 schedulerTLS:
   enabled: false
-  secretName: ""   # e.g. epp-serving-tls
+  secretName: ""
   mountPath: /etc/epp/tls
 
+# ── Identity ──────────────────────────────────────────────────────────────────
 # Name of the LLMInferenceService (also used as PVC name when storage.pvc is set)
 serviceName: my-model
 
@@ -25,31 +33,24 @@ serviceName: my-model
 replicas: 1
 
 # ── Model ─────────────────────────────────────────────────────────────────────
-
 model:
-  name: facebook/opt-125m
+  name: ""
 
 # ── Storage ───────────────────────────────────────────────────────────────────
 # type:
 #   hf  – pull from HuggingFace Hub (uri: hf://org/model)
-#   oci – pull from an OCI/ModelCar image (uri: oci://registry/repo:tag)
+#   oci – pull from an OCI/ModelCar image  (uri: oci://registry/repo:tag)
 #
-# Add a pvc section to create a PersistentVolumeClaim (named after serviceName)
-# and mount it as kserve-provision-location for local model caching:
+# Optionally add a pvc section to cache the model locally across restarts:
 #   pvc:
 #     size: 40Gi
 #     accessMode: ReadWriteOnce
 # storage:
 #   type: hf
 #   uri: hf://facebook/opt-125m
-#   pvc:
-#     size: 40Gi
-#     accessMode: ReadWriteOnce
 
 # ── Resources (decode / main container) ──────────────────────────────────────
-
-gpuMemoryUtilization: 0.95
-maxModelLen: 2000
+# Set gpuCount to request an NVIDIA GPU; omit it for CPU-only nodes.
 resources:
   limits:
     cpu: "1"
@@ -60,14 +61,67 @@ resources:
     memory: 8Gi
     # gpuCount: "1"
 
-# ── Liveness / startup probe ────────────────────────────────────────────────
-# When useStartupProbe is true (e.g. gpt-oss-20b style): emit startupProbe and
-# minimal livenessProbe (initialDelaySeconds: 10 only). Otherwise use full livenessProbe below.
+# ── Container images ──────────────────────────────────────────────────────────
+# Auto-selected: GPU image when resources.*.gpuCount is set, CPU image otherwise.
+# Set override to force a specific image regardless of gpuCount.
+images:
+  gpu: "registry.redhat.io/rhaii-early-access/vllm-cuda-rhel9@sha256:abf0fd7398a18c47a754218b0cbd76ea300b0c6da5fb8d801db8c165df5022ca"
+  cpu: "registry.redhat.io/rhaii-early-access/vllm-cpu-rhel9@sha256:7e227326e7975818040fde0cfcaf2683fe4050558f36badcb826a9085ada7fca"
+  override: ""
+
+# ── CPU-specific vLLM settings ────────────────────────────────────────────────
+# Applied automatically as env vars when no gpuCount is set. Ignored for GPU deployments.
+cpu:
+  kvCacheSpaceGiB: 4  # VLLM_CPU_KVCACHE_SPACE — GiB reserved for KV cache (default ~15 GiB causes OOM on small nodes)
+  skipWarmup: true    # VLLM_SKIP_WARMUP — skip Inductor compilation warmup; faster restarts at the cost of first-token latency
+
+# ── vLLM additional arguments ────────────────────────────────────────────────
+# When set, injected as VLLM_ADDITIONAL_ARGS before the env[] list below.
+# Keeps tool-call flags, log suppression, etc. out of the generic env list.
+# Example: "--disable-uvicorn-access-log --enable-auto-tool-choice --tool-call-parser hermes"
+vllmAdditionalArgs: ""
+
+# ── Extra env vars ────────────────────────────────────────────────────────────
+# Appended to the main container after any auto-injected CPU env vars above.
+# Use this for tracing, HF tokens, and anything not covered by vllmAdditionalArgs.
+env: []
+# env:
+#   - name: HF_TOKEN
+#     valueFrom:
+#       secretKeyRef:
+#         name: hf-token
+#         key: token
+
+# ── MaaS integration ──────────────────────────────────────────────────────────
+# When enabled: sets enable-auth to true and routes traffic through the MaaS gateway.
+# Access control is managed by MaaSSubscription + MaaSAuthPolicy CRDs in the
+# models-as-a-service namespace — create those separately after deploying the model.
+maas:
+  enabled: false
+  gateway:
+    name: maas-default-gateway
+    namespace: openshift-ingress
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+# Overridden to true automatically when maas.enabled is set.
+enableAuth: false
+
+# ── Update strategy ──────────────────────────────────────────────────────────
+# NOTE: the LLMInferenceService CRD does not expose a strategy field — the
+# operator controls the underlying Deployments directly. The scheduler
+# Deployment is always Recreate; the main workload Deployment is always
+# RollingUpdate. This value is reserved for potential future CRD support and
+# currently has no effect.
+updateStrategy: ""
+
+# ── Liveness / startup probe ─────────────────────────────────────────────────
+# When useStartupProbe is true: emit startupProbe + minimal livenessProbe.
+# Otherwise use the full livenessProbe below.
 useStartupProbe: false
-decodeStartupProbePort: 8001   # decode/main container when useStartupProbe (pd)
-mainStartupProbePort: 8000    # prefill and int-inference-simple main
+decodeStartupProbePort: 8001
+mainStartupProbePort: 8000
 startupProbe:
-  initialDelaySeconds: 15     # for intelligent-inference-simple main only
+  initialDelaySeconds: 15
   timeoutSeconds: 10
   periodSeconds: 10
   failureThreshold: 60
@@ -80,23 +134,13 @@ livenessProbe:
   timeoutSeconds: 30
   failureThreshold: 5
 
-# ── Extra env vars appended to the main container ────────────────────────────
-# For pd-disaggregation the VLLM_NIXL_* and VLLM_ADDITIONAL_ARGS env vars are
-# already set by the template; use this list for any additional overrides.
-env: []
-# env:
-#   - name: VLLM_ADDITIONAL_ARGS
-#     value: "--disable-uvicorn-access-log"
-
 # ── Intelligent-inference: scheduler (EPP) config ────────────────────────────
-
 scheduler:
-  hashBlockSize: 64              # block size 16 * 4 chars/token
-  maxPrefixBlocksToMatch: 256    # matches up to ~4k tokens
-  lruCapacityPerServer: 39744    # total blocks (635904) / block size (16)
+  hashBlockSize: 64
+  maxPrefixBlocksToMatch: 256
+  lruCapacityPerServer: 39744
 
 # ── PD disaggregation: prefill pool ──────────────────────────────────────────
-
 prefill:
   replicas: 1
   resources:
@@ -117,16 +161,14 @@ prefill:
     failureThreshold: 5
 
 # ── PD disaggregation: scheduler (EPP) config ────────────────────────────────
-
 pdScheduler:
   threshold: 30000
   maxNumOfEndpoints: 1
 
 # ── PD disaggregation: NixlConnector KV transfer config ──────────────────────
-
 kvTransfer:
   blockSize: 128
   abortRequestTimeout: "100000"
-  loggingLevel: "DEBUG"   # set to "" to omit VLLM_LOGGING_LEVEL env (e.g. qwen-pd playbook)
-  vllmArgsOrder: "uvicorn_first"   # "uvicorn_first" | "kv_first" for VLLM_ADDITIONAL_ARGS
-  envOrder: "gpt_first"            # "gpt_first" (VLLM_ADDITIONAL_ARGS first) | "nixl_first" (VLLM_NIXL_* first, qwen-pd style)
+  loggingLevel: "DEBUG"
+  vllmArgsOrder: "uvicorn_first"
+  envOrder: "gpt_first"

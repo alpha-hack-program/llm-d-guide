@@ -1,0 +1,22 @@
+{{- if .Values.limitador.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: limitador-metrics
+  namespace: kuadrant-system
+  labels:
+    app: limitador
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  selector:
+    matchLabels:
+      app: limitador
+  namespaceSelector:
+    matchNames:
+      - kuadrant-system
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.limitador.scrapeInterval }}
+{{- end }}

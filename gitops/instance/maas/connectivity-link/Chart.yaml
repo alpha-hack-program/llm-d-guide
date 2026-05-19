@@ -1,0 +1,4 @@
+apiVersion: v2
+description: Kuadrant CR for RHOAI MaaS — instantiates Authorino and Limitador via Red Hat Connectivity Link
+name: maas-connectivity-link
+version: 1.0.0

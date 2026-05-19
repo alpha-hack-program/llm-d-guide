@@ -1,0 +1,53 @@
+{{- if .Values.alerting.gateway.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: maas-gateway-alerts
+  namespace: {{ .Values.alerting.gateway.gatewayNamespace }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  groups:
+    - name: maas-gateway-errors
+      rules:
+        - alert: MaaSGatewayAuthTimeout
+          expr: |
+            sum(rate(kuadrant_errors[5m])) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MaaS gateway auth timeout (WASM 200ms limit)"
+            description: "The Kuadrant WASM filter is timing out at {{ "{{ $value | humanize }}" }} req/s."
+
+        - alert: MaaSBackend5xx
+          expr: |
+            sum(rate(istio_requests_total{
+              source_workload="{{ .Values.alerting.gateway.gatewayName }}-openshift-default",
+              response_code=~"5.."}[5m])) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MaaS backend returning 5xx errors"
+            description: "Backend services are returning server errors at {{ "{{ $value | humanize }}" }} req/s."
+
+        - alert: MaaSGatewayErrorsCritical
+          expr: |
+            (
+              sum(rate(kuadrant_errors[5m]))
+              + sum(rate(istio_requests_total{
+                  source_workload="{{ .Values.alerting.gateway.gatewayName }}-openshift-default",
+                  response_code=~"5.."}[5m]))
+            ) / (
+              sum(rate(kuadrant_allowed[5m]))
+              + sum(rate(kuadrant_denied[5m]))
+              + sum(rate(kuadrant_errors[5m]))
+            ) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "MaaS total error rate exceeds 5%"
+            description: "More than 5% of all gateway requests are failing."
+{{- end }}

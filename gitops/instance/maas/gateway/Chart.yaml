@@ -1,0 +1,4 @@
+apiVersion: v2
+description: Gateway resources for RHOAI 3.4 MaaS (Models-as-a-Service)
+name: maas-gateway
+version: 1.0.0

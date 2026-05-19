@@ -1,0 +1,171 @@
+{
+  "title": "MaaS Platform Overview",
+  "uid": "maas-platform-overview",
+  "description": "API gateway metrics: authorized/limited calls, rejection ratio, active connections",
+  "tags": ["maas", "gateway", "kuadrant", "limitador"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": true, "text": "Prometheus", "value": "Prometheus" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Authorized Requests/sec",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 5, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(authorized_calls[5m]))", "legendFormat": "Authorized", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps", "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Limited Requests/sec",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 5, "x": 5, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(limited_calls[5m]))", "legendFormat": "Limited", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps", "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 2 }] }
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Error Rate/sec",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 5, "x": 10, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(kuadrant_errors[5m])) + sum(rate(istio_requests_total{source_workload=\"maas-default-gateway-openshift-default\", response_code=~\"5..\"}[5m]))", "legendFormat": "Errors", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps", "decimals": 2, "noValue": "0",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.01 }] }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Rejection Ratio",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 5, "x": 15, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(limited_calls[5m])) / (sum(rate(authorized_calls[5m])) + sum(rate(limited_calls[5m])))", "legendFormat": "Rejection %", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit", "decimals": 1, "noValue": "0%",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.1 }, { "color": "red", "value": 0.3 }] }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Total Requests (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(authorized_calls[5m])) + sum(increase(limited_calls[5m])) + sum(increase(kuadrant_errors[5m]))", "legendFormat": "Total", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short", "decimals": 0,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Request Outcomes Over Time",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(authorized_calls[5m]))", "legendFormat": "Authorized" },
+        { "refId": "B", "expr": "sum(rate(limited_calls[5m]))", "legendFormat": "Rate Limited (429)" },
+        { "refId": "C", "expr": "sum(rate(kuadrant_errors[5m]))", "legendFormat": "Auth Timeout (500)" },
+        { "refId": "D", "expr": "sum(rate(istio_requests_total{source_workload=\"maas-default-gateway-openshift-default\", response_code=~\"5..\"}[5m]))", "legendFormat": "Backend Error (5xx)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Rejection Ratio Over Time",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(limited_calls[5m])) / (sum(rate(authorized_calls[5m])) + sum(rate(limited_calls[5m])))", "legendFormat": "Rejection Ratio" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit", "min": 0, "max": 1,
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineInterpolation": "smooth" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.1 }, { "color": "red", "value": 0.3 }] }
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Calls by Model",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "refId": "A", "expr": "label_replace(sum by(limitador_namespace) (rate(authorized_calls[5m])), \"model\", \"$1\", \"limitador_namespace\", \".*/(.*)-kserve-route\")", "legendFormat": "{{model}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth", "stacking": { "mode": "normal" } } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Calls by User",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "refId": "A", "expr": "topk(10, sum by(user) (label_replace(rate(authorized_calls[5m]), \"user\", \"$1\", \"user\", \"(.*)-[0-9a-f]{8}$\")))", "legendFormat": "{{user}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    }
+  ]
+}

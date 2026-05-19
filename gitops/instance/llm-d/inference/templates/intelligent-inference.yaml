@@ -8,20 +8,59 @@
 {{- if not .Values.storage.uri }}
 {{- fail "intelligent-inference requires values.storage.uri to be set" }}
 {{- end }}
+
+{{- /* ── Derived booleans ─────────────────────────────────────────────────── */}}
+{{- $isGPU := false }}
+{{- if or .Values.resources.limits.gpuCount .Values.resources.requests.gpuCount }}
+  {{- $isGPU = true }}
+{{- end }}
+
+{{- /* ── Image auto-selection ─────────────────────────────────────────────── */}}
+{{- $img := .Values.images.override }}
+{{- if not $img }}
+  {{- $img = ternary .Values.images.gpu .Values.images.cpu $isGPU }}
+{{- end }}
+
+{{- /* ── Hardware profile auto-selection ───────────────────────────────────── */}}
+{{- $hwProfile := .Values.hardwareProfile.name }}
+{{- if not $hwProfile }}
+  {{- $hwProfile = ternary "gpu-profile" "default-cpu" $isGPU }}
+{{- end }}
+
+{{- /* ── Auth: MaaS always requires auth ──────────────────────────────────── */}}
+{{- $enableAuth := .Values.enableAuth | default false }}
+{{- if .Values.maas.enabled }}
+  {{- $enableAuth = true }}
+{{- end }}
+
+{{- /* ── Env vars: CPU defaults + vllmAdditionalArgs + user extras ────────── */}}
+{{- $envVars := .Values.env | default list }}
+{{- if not $isGPU }}
+  {{- if .Values.cpu.kvCacheSpaceGiB }}
+    {{- $envVars = prepend $envVars (dict "name" "VLLM_CPU_KVCACHE_SPACE" "value" (.Values.cpu.kvCacheSpaceGiB | toString)) }}
+  {{- end }}
+  {{- if .Values.cpu.skipWarmup }}
+    {{- $envVars = prepend $envVars (dict "name" "VLLM_SKIP_WARMUP" "value" "true") }}
+  {{- end }}
+{{- end }}
+{{- if .Values.vllmAdditionalArgs }}
+  {{- $envVars = append $envVars (dict "name" "VLLM_ADDITIONAL_ARGS" "value" .Values.vllmAdditionalArgs) }}
+{{- end }}
+
 ---
-apiVersion: serving.kserve.io/v1alpha1
+apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:
   name: {{ .Values.serviceName }}
   annotations:
     opendatahub.io/model-type: generative
     openshift.io/display-name: "{{ .Values.serviceName }}"
-    security.opendatahub.io/enable-auth: '{{ default false .Values.enableAuth }}'
-    opendatahub.io/hardware-profile-namespace: redhat-ods-applications
-    opendatahub.io/hardware-profile-name: gpu-profile
-  {{- if eq .Values.storage.type "oci" }}
+    security.opendatahub.io/enable-auth: "{{ $enableAuth }}"
+    opendatahub.io/hardware-profile-namespace: {{ .Values.hardwareProfile.namespace }}
+    opendatahub.io/hardware-profile-name: {{ $hwProfile }}
+    {{- if eq .Values.storage.type "oci" }}
     opendatahub.io/connections: {{ .Values.serviceName }}-connection
-  {{- end }}
+    {{- end }}
   labels:
     networking.kserve.io/visibility: exposed
     opendatahub.io/dashboard: "true"
@@ -33,7 +72,12 @@ spec:
     uri: {{ .Values.storage.uri }}
     name: {{ .Values.model.name }}
   router:
-    gateway: {}
+    gateway:
+      {{- if and .Values.maas.enabled .Values.maas.gateway.name }}
+      refs:
+        - name: {{ .Values.maas.gateway.name }}
+          namespace: {{ .Values.maas.gateway.namespace }}
+      {{- end }}
     route: {}
     {{- if .Values.intelligentInferenceSimple }}
     scheduler: {}
@@ -86,9 +130,9 @@ spec:
                 - type: kv-cache-utilization-scorer
                 - type: prefix-cache-scorer
                   parameters:
-                    hashBlockSize: {{ .Values.scheduler.hashBlockSize }}             # block size 16 * 4 chars / token
-                    maxPrefixBlocksToMatch: {{ .Values.scheduler.maxPrefixBlocksToMatch }}   # this matches up to ~4k tokens
-                    lruCapacityPerServer: {{ .Values.scheduler.lruCapacityPerServer }}   # total blocks (635904) / block size (16)
+                    hashBlockSize: {{ .Values.scheduler.hashBlockSize }}
+                    maxPrefixBlocksToMatch: {{ .Values.scheduler.maxPrefixBlocksToMatch }}
+                    lruCapacityPerServer: {{ .Values.scheduler.lruCapacityPerServer }}
                 schedulingProfiles:
                 - name: default
                   plugins:
@@ -101,10 +145,12 @@ spec:
                     - pluginRef: max-score-picker
     {{- end }}
   template:
+    {{- if $isGPU }}
     tolerations:
       - key: "nvidia.com/gpu"
         operator: "Exists"
         effect: "NoSchedule"
+    {{- end }}
     {{- if and .Values.storage.pvc .Values.storage.pvc.size }}
     volumes:
       - name: kserve-provision-location
@@ -113,9 +159,10 @@ spec:
     {{- end }}
     containers:
       - name: main
-        {{- if .Values.env }}
+        image: {{ $img }}
+        {{- if $envVars }}
         env:
-          {{- toYaml .Values.env | nindent 10 }}
+          {{- toYaml $envVars | nindent 10 }}
         {{- end }}
         resources:
           limits:
@@ -130,9 +177,11 @@ spec:
             {{- if .Values.resources.requests.gpuCount }}
             nvidia.com/gpu: {{ .Values.resources.requests.gpuCount | quote }}
             {{- end }}
-        {{- if and .Values.intelligentInferenceSimple .Values.useStartupProbe }}
+        {{- if or (and .Values.intelligentInferenceSimple .Values.useStartupProbe) (eq .Values.updateStrategy "Recreate") }}
         strategy:
           type: Recreate
+        {{- end }}
+        {{- if and .Values.intelligentInferenceSimple .Values.useStartupProbe }}
         livenessProbe:
           initialDelaySeconds: 10
         startupProbe:

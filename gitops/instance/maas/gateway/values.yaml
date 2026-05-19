@@ -1,0 +1,60 @@
+# Cluster ingress domain.
+# Run: oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}'
+clusterDomain: "apps.example.com"
+
+# Subdomain for the listener hostname when useOpenShiftRoute=false (LB path).
+subdomain: "maas"
+
+gateway:
+  enabled: true
+  # Name of the Gateway and GatewayClass resources.
+  name: maas-default-gateway
+  # Namespace where the Gateway and its Envoy service are created.
+  namespace: openshift-ingress
+  # GatewayClass name — must match gatewayclass.yaml.
+  className: openshift-default
+  # Kubernetes Service type for the Envoy proxy.
+  # ClusterIP (default): traffic enters via an OpenShift Route.
+  # LoadBalancer: for clusters with a cloud LB controller (AWS, GCP, Azure).
+  serviceType: ClusterIP
+  # Extra namespaces whose HTTPRoutes the Gateway will accept.
+  # redhat-ods-applications and models-as-a-service are always included.
+  modelNamespaces: []
+
+# true  → expose via an OpenShift Route fronting the ClusterIP Gateway service.
+# false → expose directly via a LoadBalancer Service; set gateway.serviceType: LoadBalancer.
+useOpenShiftRoute: true
+
+tls:
+  # Name of the TLS secret mounted by the Gateway HTTPS listener.
+  # Set to "" to use plain HTTP instead.
+  # passthrough (default): use the cluster wildcard cert
+  #   AWS/ROSA:       ingress-certs
+  #   bare-metal/SNO: router-certs-default
+  # reencrypt:        use a service-ca generated cert (e.g. maas-gateway-service-tls)
+  secretName: "ingress-certs"
+  # true  → create a cert-manager Issuer + Certificate to auto-generate the secret.
+  # false → the secret must already exist.
+  generate: false
+  # Cert-manager issuer to use when generate=true.
+  # "selfsigned"  → create a self-signed Issuer in the gateway namespace.
+  # "letsencrypt" → use the letsencrypt ClusterIssuer (requires DNS).
+  # any other name → reference an existing Issuer in the gateway namespace.
+  issuerName: "selfsigned"
+
+route:
+  # TLS termination mode for the OpenShift Route (only used when useOpenShiftRoute=true).
+  # passthrough → router forwards raw TLS to Gateway; Gateway cert must match *.apps.<cluster>.
+  # reencrypt   → router terminates client TLS, opens new TLS to Gateway (service-ca cert).
+  # edge        → router terminates TLS; Gateway uses plain HTTP (only valid when tls.secretName="").
+  tlsTermination: passthrough
+
+# Limitador CR patch — emits per-limit-name labels on all Limitador metrics,
+# not only on calls that were actually rate-limited.
+limitador:
+  exhaustiveTelemetry: true
+
+# TelemetryPolicy enriches Limitador metrics with user/tier/model labels
+# so Grafana dashboards can break down usage by identity.
+telemetry:
+  enabled: true

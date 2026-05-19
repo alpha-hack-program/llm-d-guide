@@ -1,0 +1,32 @@
+# Grafana dashboards — requires Grafana Operator CRDs.
+# Namespace must contain a Grafana instance matching instanceSelector.
+grafana:
+  enabled: false
+  namespace: llama-stack-demo-user1
+  instanceSelector:
+    dashboards: grafana
+
+# Limitador ServiceMonitor — requires Kuadrant installed in kuadrant-system.
+limitador:
+  enabled: false
+  scrapeInterval: 30s
+
+# PrometheusRule alerts — split into two groups:
+#   gateway: Kuadrant WASM / Istio errors on the MaaS gateway
+#   limitador: Limitador up/down and rejection-rate alerts
+alerting:
+  gateway:
+    enabled: false
+    gatewayName: maas-default-gateway
+    gatewayNamespace: openshift-ingress
+  limitador:
+    enabled: false
+    # Fraction of requests that trigger MaaSHighRejectionRate (0.3 = 30%)
+    rejectionRateThreshold: 0.3
+
+# vLLM metrics — requires models deployed with component=predictor label.
+# Enables PodMonitor, service-ca-bundle ConfigMap, and vLLM SLO PrometheusRules.
+vllm:
+  enabled: false
+  modelNamespace: models-as-a-service
+  scrapeInterval: 30s

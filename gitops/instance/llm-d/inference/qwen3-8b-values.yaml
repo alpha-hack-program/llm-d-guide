@@ -1,0 +1,29 @@
+deploymentType: intelligent-inference
+serviceName: qwen3-8b
+replicas: 2
+
+model:
+  name: alibaba/qwen3-8b
+
+storage:
+  type: oci
+  uri: oci://registry.redhat.io/rhelai1/modelcar-qwen3-8b-fp8-dynamic:1.5
+
+resources:
+  limits:
+    cpu: "6"
+    memory: 24Gi
+    gpuCount: "1"
+  requests:
+    cpu: "6"
+    memory: 24Gi
+    gpuCount: "1"
+
+hardwareProfile:
+  namespace: redhat-ods-applications
+  name: nvidia
+
+vllmAdditionalArgs: "--disable-uvicorn-access-log --enable-auto-tool-choice --tool-call-parser hermes"
+
+maas:
+  enabled: true

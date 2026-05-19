@@ -1,0 +1,22 @@
+{{- if .Values.useOpenShiftRoute }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Values.gateway.name }}
+  namespace: {{ .Values.gateway.namespace }}
+spec:
+  host: "{{ .Values.gateway.name }}-{{ .Values.gateway.namespace }}.{{ .Values.clusterDomain }}"
+  to:
+    kind: Service
+    name: {{ .Values.gateway.name }}-{{ .Values.gateway.className }}
+    weight: 100
+  port:
+    targetPort: {{ if .Values.tls.secretName }}https{{ else }}http{{ end }}
+  {{- if .Values.tls.secretName }}
+  tls:
+    termination: {{ .Values.route.tlsTermination }}
+    insecureEdgeTerminationPolicy: Redirect
+  {{- end }}
+  wildcardPolicy: None
+{{- end }}

@@ -1,0 +1,135 @@
+{
+  "title": "MaaS Per-Tier Usage",
+  "uid": "maas-tier-usage",
+  "description": "Per-tier breakdown of requests and tokens across free and premium tiers",
+  "tags": ["maas", "tiers", "kuadrant", "usage"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": true, "text": "Prometheus", "value": "Prometheus" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "type": "datasource"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Free Tier Requests/sec",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(authorized_calls{tier=\"free\"}[5m]))", "legendFormat": "Free", "instant": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "blue" } } }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Premium Tier Requests/sec",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(authorized_calls{tier=\"premium\"}[5m]))", "legendFormat": "Premium", "instant": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "purple" } } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Free Tier Rate Limited/sec",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(limited_calls{tier=\"free\"}[5m]))", "legendFormat": "Free Limited", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps", "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.5 }] }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Premium Tier Rate Limited/sec",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(limited_calls{tier=\"premium\"}[5m]))", "legendFormat": "Premium Limited", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps", "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.1 }] }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Authorized Calls by Tier",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "refId": "A", "expr": "sum by(tier) (rate(authorized_calls[5m]))", "legendFormat": "{{tier}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "stacking": { "mode": "normal" } } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Limited Calls by Tier",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "refId": "A", "expr": "sum by(tier) (rate(limited_calls[5m]))", "legendFormat": "{{tier}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineInterpolation": "smooth", "stacking": { "mode": "normal" } } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Token Throughput by Model (vLLM)",
+      "description": "Generation and prompt tokens per model",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "refId": "A", "expr": "sum by(model_name) (rate(kserve_vllm:generation_tokens_total[5m]))", "legendFormat": "{{model_name}} gen tokens/s" },
+        { "refId": "B", "expr": "sum by(model_name) (rate(kserve_vllm:prompt_tokens_total[5m]))", "legendFormat": "{{model_name}} prompt tokens/s" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Calls by Tier and Model",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "refId": "A", "expr": "label_replace(sum by(tier, limitador_namespace) (rate(authorized_calls[5m])), \"model\", \"$1\", \"limitador_namespace\", \".*/(.*)-kserve-route\")", "legendFormat": "{{tier}} / {{model}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineInterpolation": "smooth" } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true } }
+    }
+  ]
+}

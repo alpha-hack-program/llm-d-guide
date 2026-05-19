@@ -1,0 +1,4 @@
+apiVersion: v2
+description: OpenShift Groups for MaaS tier-based access control
+name: maas-rbac
+version: 1.0.0

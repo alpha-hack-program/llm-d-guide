@@ -22,7 +22,7 @@ olmProfile: stable
 presets:
   stable:
     channel: stable-3.x
-    startingCSV: rhods-operator.3.3.2
+    startingCSV: rhods-operator.3.4.0
   ea:
     channel: beta
     startingCSV: rhods-operator.3.4.0-ea.2

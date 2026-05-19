@@ -1,0 +1,34 @@
+{{- if .Values.vllm.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: serving-certs-ca-bundle
+  namespace: {{ .Values.vllm.modelNamespace }}
+  annotations:
+    # OpenShift service CA injects the cluster CA bundle here for TLS scraping.
+    service.beta.openshift.io/inject-cabundle: "true"
+data: {}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: vllm-metrics
+  namespace: {{ .Values.vllm.modelNamespace }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  selector:
+    matchLabels:
+      component: predictor
+  podMetricsEndpoints:
+    - port: user-port
+      path: /metrics
+      interval: {{ .Values.vllm.scrapeInterval }}
+      scheme: https
+      tlsConfig:
+        ca:
+          configMap:
+            name: serving-certs-ca-bundle
+            key: service-ca.crt
+{{- end }}

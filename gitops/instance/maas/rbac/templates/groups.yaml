@@ -1,0 +1,15 @@
+{{- range .Values.tiers }}
+{{- range .groups }}
+{{- if not (hasPrefix "system:" .) }}
+---
+apiVersion: user.openshift.io/v1
+kind: Group
+metadata:
+  name: {{ . }}
+  annotations:
+    # Preserve member lists across helm upgrade/uninstall — members are added manually.
+    helm.sh/resource-policy: keep
+users: []
+{{- end }}
+{{- end }}
+{{- end }}

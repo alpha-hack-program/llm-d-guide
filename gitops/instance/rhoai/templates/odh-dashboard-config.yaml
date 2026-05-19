@@ -23,7 +23,7 @@ spec:
     disableKServeAuth: false
     disableKServeMetrics: false
     disableKServeRaw: false
-    disableKueue: false
+    disableKueue: {{ not (.Values.kueue | default false) }}
     disableLMEval: false
     disableModelCatalog: false
     disableModelMesh: false
@@ -44,7 +44,9 @@ spec:
     disableUserManagement: false
     enablement: true
     genAiStudio: true
-    modelAsService: true
+    maasAuthPolicies: {{ if (.Values.modelsAsService | default false) }}true{{ else }}false{{ end }}
+    modelAsService: {{ if (.Values.modelsAsService | default false) }}true{{ else }}false{{ end }}
+    vLLMDeploymentOnMaaS: {{ if (.Values.modelsAsService | default false) }}true{{ else }}false{{ end }}
     mlflow: {{ if (.Values.mlflow | default false) }}true{{ else }}false{{ end }}
   groupsConfig:
     adminGroups: {{ .Values.odhDashboardConfig.adminGroups | default "rhods-admins" }}

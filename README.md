@@ -1,8 +1,8 @@
-# Red Hat OpenShift AI 3.3 — Installation Manual
+# Red Hat OpenShift AI 3.4 — Installation Manual
 
-**Version:** 3.3 Self-Managed  
-**Target Platform:** OpenShift Container Platform 4.20  
-**Date:** March 2026  
+**Version:** 3.4 Self-Managed  
+**Target Platform:** OpenShift Container Platform 4.21  
+**Date:** May 2026  
 **Classification:** Internal / Operations
 
 ---
@@ -28,7 +28,7 @@
 
 ## 1. Overview
 
-Red Hat OpenShift AI (RHOAI) 3.3 is a self-managed AI/ML platform that provides an integrated environment for developing, training, serving, and monitoring models across hybrid cloud environments. This manual covers a full installation plan organized into two tiers.
+Red Hat OpenShift AI (RHOAI) 3.4 is a self-managed AI/ML platform that provides an integrated environment for developing, training, serving, and monitoring models across hybrid cloud environments. This manual covers a full installation plan organized into two tiers.
 
 **RHOAI Basic Features:**
 
@@ -52,11 +52,11 @@ Red Hat OpenShift AI (RHOAI) 3.3 is a self-managed AI/ML platform that provides 
 * OpenTelemetry observability (traces, metrics, and logs for RHOAI and model serving components)
 * TLS certificate management (via cert-manager Operator or manual certificate generation)
 
-> **Important:** There is no upgrade path from OpenShift AI 2.x to 3.3. This version requires a fresh installation. For distributed inference with llm-d, OCP 4.20 is required.
+> **Important:** There is no upgrade path from OpenShift AI 2.x to 3.4. This version requires a fresh installation. For distributed inference with llm-d, OCP 4.20 is required.
 
 **Official Documentation:**
 
-* [RHOAI 3.3 Product Documentation](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.3)
+* [RHOAI 3.4 Product Documentation](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4)
 * [Supported Configurations for 3.x](https://access.redhat.com/articles/rhoai-supported-configs-3.x)
 * [Supported Product and Hardware Configurations](https://docs.redhat.com/en/documentation/red_hat_ai/3/html/supported_product_and_hardware_configurations/index)
 * [llm-d Release Component Versions](https://access.redhat.com/articles/7136620)
@@ -162,7 +162,7 @@ You can instead edit `gitops/operators/rhoai/values.yaml` (`olmProfile` or expli
 
 ## 3. Prerequisite Operators
 
-RHOAI 3.3 requires several operators installed **before** creating the DataScienceCluster. Install them via **Operators → OperatorHub** in the web console or via CLI Subscription objects.
+RHOAI 3.4 requires several operators installed **before** creating the DataScienceCluster. Install them via **Operators → OperatorHub** in the web console or via CLI Subscription objects.
 
 > **Note on cert-manager:** The cert-manager Operator for Red Hat OpenShift is recommended for automating TLS certificate lifecycle across RHOAI, llm-d, OpenTelemetry, and Llama Stack. It is not a hard requirement — you can provide manually generated certificates wherever TLS is needed. That said, several components document cert-manager as a dependency in their official guides, making it the path of least resistance for most deployments.
 
@@ -445,7 +445,7 @@ done
 > **Note on Service Mesh 3.x:** Install OpenShift Service Mesh 3.x **only** if you intend to use the Llama Stack Operator. It is not a prerequisite for llm-d or base RHOAI model serving.
 
 ```bash
-# 1. Connectivity Link (Authorino + Limitador — required for RHOAI 3.x KServe auth and MaaS)
+# 1. Connectivity Link (RHCL operator — Authorino + Limitador + Kuadrant CRDs)
 oc apply -k ./gitops/operators/connectivity-link
 # InstallPlan may require manual approval due to dependencies
 oc get installplan -n openshift-operators | grep -i "requiresapproval"
@@ -454,6 +454,13 @@ oc get installplan -n openshift-operators | grep -i "requiresapproval"
 oc get csv -n openshift-operators -w | grep -E "rhcl|authorino|limitador"
 # Wait for AuthPolicy CRD
 oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
+
+# 1b. Create the Kuadrant CR — instantiates the Authorino and Limitador operands.
+#     Required for MaaS auth and rate-limiting enforcement.
+#     On OCP 4.19+ no Service Mesh is needed; restart the operator pod if it stays Not Ready.
+helm template gitops/instance/maas/connectivity-link \
+  --name-template maas-connectivity-link | oc apply -f -
+oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
 
 # 2. Leader Worker Set (required for llm-d multi-node deployments)
 # Apply in a loop to work around potential CRD install race conditions
@@ -645,7 +652,7 @@ oc get csv -n openshift-operators -w | grep -E "pipelines"
 
 # Quick Start Guide to Deploy llm-d
 
-Deploy llm-d on a connected OpenShift 4.20 cluster with RHOAI 3.3.
+Deploy llm-d on a connected OpenShift 4.21 cluster with RHOAI 3.4.
 
 > **Prerequisites:** Complete all steps in Section 3 before proceeding. In particular, confirm that the `LLMInferenceService` CRD is available (`oc get crd llminferenceservices.serving.kserve.io`) and that both `odh-model-controller` and `kserve-controller-manager` pods are Running in `redhat-ods-applications`.
 
@@ -913,6 +920,336 @@ oc delete llminferenceservice qwen3-8b -n ${PROJECT}
 
 ---
 
+## 9. Model as a Service (MaaS)
+
+> **Technology Preview:** MaaS is a Technology Preview feature in RHOAI 3.4 and is not supported under production SLAs.
+
+MaaS provides subscription-based governed access to LLMs via `sk-oai-*` API keys, token-based rate limiting, and quota enforcement. It sits on top of KServe (llm-d runtime) and uses Kuadrant (via Red Hat Connectivity Link) for policy enforcement.
+
+Access control is CRD-based: `MaaSSubscription` defines token rate limits per model per group, and `MaaSAuthPolicy` grants groups access to models. Users can belong to multiple subscriptions. All config lives in the `models-as-a-service` namespace and is fully GitOps-compatible.
+
+### 9.1 Prerequisites
+
+| Requirement | Chart / Command |
+| --- | --- |
+| RHOAI 3.4 with `kserve: Managed` and `modelsAsService: Managed` | `gitops/instance/rhoai` (set `modelsAsService: true` in values) |
+| Red Hat Connectivity Link v1.2+ installed | `gitops/operators/connectivity-link` |
+| **Kuadrant CR** in `kuadrant-system` | `gitops/instance/maas/connectivity-link` |
+| cert-manager Operator | `gitops/operators/cert-manager-operator` |
+| LeaderWorkerSet Operator | `gitops/operators/leader-worker-set` |
+| `GatewayClass` (`openshift.io/gateway-controller`) | created by `gitops/instance/maas/gateway` |
+| Gateway `maas-default-gateway` in `openshift-ingress` | created by `gitops/instance/maas/gateway` |
+| OCP 4.20+ | version check: `oc version` |
+
+### 9.2 Install Steps
+
+**Step 1 — Kuadrant CR** (Authorino + Limitador instances):
+
+```bash
+helm template gitops/instance/maas/connectivity-link \
+  --name-template maas-connectivity-link | oc apply -f -
+oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
+# If it stays Not Ready with "istio/envoy gateway not installed", restart the operator pod:
+# oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
+```
+
+**Step 2 — MaaS Gateway** (GatewayClass + Gateway + Route):
+
+```bash
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+helm template gitops/instance/maas/gateway \
+  --name-template maas-gateway \
+  --set clusterDomain="${CLUSTER_DOMAIN}" \
+  --set useOpenShiftRoute=true \
+  --set tls.secretName=ingress-certs \
+  --set "gateway.modelNamespaces={<your-model-namespace>}" | oc apply -f -
+oc get gateway maas-default-gateway -n openshift-ingress
+```
+
+> **Important:** Every namespace that contains MaaS-published `LLMInferenceService` resources must be listed in `gateway.modelNamespaces`. If a namespace is missing, the HTTPRoute will be rejected with `NotAllowedByListeners` and the `LLMInferenceService` will show `HTTPRoutesReady: False`.
+
+**Step 3 — Enable MaaS in the DataScienceCluster:**
+
+```bash
+oc patch datasciencecluster default-dsc --type=merge \
+  -p '{"spec":{"components":{"kserve":{"modelsAsService":{"managementState":"Managed"}}}}}'
+oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
+```
+
+**Step 4 — Configure Authorino TLS:**
+
+This is required for the MaaS API gateway to communicate with Authorino securely. Without it, the `maas-api/v1/api-keys` endpoint returns `500 Internal Server Error`.
+
+```bash
+# 4a. Generate a serving certificate for Authorino (service-ca-operator signs it)
+oc annotate service authorino-authorino-authorization \
+  -n kuadrant-system \
+  service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert \
+  --overwrite
+
+# 4b. Enable TLS on the Authorino CR
+oc patch authorino authorino -n kuadrant-system --type=merge --patch '{
+  "spec": {
+    "listener": {
+      "tls": {
+        "enabled": true,
+        "certSecretRef": {"name": "authorino-server-cert"}
+      }
+    }
+  }
+}'
+
+# 4c. Configure Authorino to validate certs using the cluster CA bundle
+oc -n kuadrant-system set env deployment/authorino \
+  SSL_CERT_FILE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
+  REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt
+oc rollout status deployment/authorino -n kuadrant-system --timeout=90s
+
+# 4d. Annotate the gateway — maas-controller creates an EnvoyFilter for Authorino TLS.
+#     IMPORTANT: Do this AFTER steps 4a-4c, or remove+re-add the annotation to force
+#     the maas-controller to reconcile and create the maas-default-gateway-authn-ssl filter.
+oc annotate gateway maas-default-gateway \
+  -n openshift-ingress \
+  security.opendatahub.io/authorino-tls-bootstrap="true" \
+  --overwrite
+```
+
+Verify:
+```bash
+oc get service authorino-authorino-authorization -n kuadrant-system \
+  -o jsonpath='{.metadata.annotations.service\.beta\.openshift\.io/serving-cert-secret-name}'
+# Expected: authorino-server-cert
+
+oc get secret authorino-server-cert -n kuadrant-system
+# Expected: kubernetes.io/tls with 2 data entries
+
+oc get authorino authorino -n kuadrant-system -o jsonpath='{.spec.listener.tls.enabled}'
+# Expected: true
+
+oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress
+# Expected: present (created by maas-controller after annotation)
+```
+
+**Step 5 — Bootstrap the MaaS 3.4 subscription namespace:**
+
+MaaS 3.4 uses `Tenant`, `MaaSModelRef`, `MaaSSubscription`, and `MaaSAuthPolicy` CRs. All live in the `models-as-a-service` namespace.
+
+```bash
+# 5a. Create the namespace
+oc create namespace models-as-a-service
+
+# 5b. Create the Tenant CR — must be named exactly "default-tenant"
+cat <<'EOF' | oc apply -f -
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: Tenant
+metadata:
+  name: default-tenant
+  namespace: models-as-a-service
+spec:
+  apiKeys:
+    maxExpirationDays: 90
+  gatewayRef:
+    name: maas-default-gateway
+    namespace: openshift-ingress
+EOF
+
+# 5c. Inject the DB connection URL into the maas-api deployment
+oc patch deployment maas-api -n redhat-ods-applications --type=json -p='[{
+  "op": "add",
+  "path": "/spec/template/spec/containers/0/env/-",
+  "value": {
+    "name": "DB_CONNECTION_URL",
+    "valueFrom": {"secretKeyRef": {"name": "maas-db-config", "key": "DB_CONNECTION_URL"}}
+  }
+}]'
+oc rollout status deployment/maas-api -n redhat-ods-applications --timeout=60s
+```
+
+**Step 6 — Register models and create subscription/auth policies:**
+
+For each model namespace (repeat `MaaSModelRef` for every `LLMInferenceService` you want to publish):
+
+```bash
+# 6a. Create MaaSModelRef CRs in the model namespace
+cat <<'EOF' | oc apply -f -
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: <model-name>          # must match LLMInferenceService name
+  namespace: <model-namespace>
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: <model-name>
+EOF
+
+# 6b. Create a MaaSSubscription (token rate limits per model, per group)
+cat <<'EOF' | oc apply -f -
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: free-tier-subscription
+  namespace: models-as-a-service
+spec:
+  owner:
+    groups:
+      - name: cluster-admins
+      - name: tier-free-users
+  modelRefs:
+    - name: <model-name>
+      namespace: <model-namespace>
+      tokenRateLimits:
+        - limit: 100000
+          window: 1h
+EOF
+
+# 6c. Create a MaaSAuthPolicy (grants groups access to models)
+cat <<'EOF' | oc apply -f -
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: free-tier-auth-policy
+  namespace: models-as-a-service
+spec:
+  subjects:
+    groups:
+      - name: cluster-admins
+      - name: tier-free-users
+  modelRefs:
+    - name: <model-name>
+      namespace: <model-namespace>
+EOF
+```
+
+**Step 7 — Enable the dashboard interface and MaaS auth policies:**
+
+```bash
+oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge \
+  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"modelAsService":true,"maasAuthPolicies":true}}}'
+```
+
+**Verify end-to-end — generate and use an API key:**
+
+```bash
+TOKEN=$(oc whoami -t)
+MAAS_GW="maas-default-gateway-openshift-ingress.apps.<cluster-domain>"
+
+# Create an API key
+curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my-key","expiresInDays":30}'
+# Returns: {"key":"sk-oai-...","id":"...","name":"my-key","createdAt":"..."}
+
+# Use the API key to call a model
+API_KEY="sk-oai-..."
+curl -sk "https://${MAAS_GW}/llm-d-demo/<model-name>/v1/chat/completions" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<model-name>","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+### 9.3 Publish a Model to MaaS
+
+In the RHOAI dashboard, deploy a model using the **Distributed inference with llm-d** runtime and select **Publish as MaaS endpoint** in Advanced settings. Only the llm-d runtime supports MaaS integration.
+
+For models deployed via Helm (outside the dashboard), create the `MaaSModelRef`, `MaaSSubscription`, and `MaaSAuthPolicy` CRs manually as shown in Step 6 above.
+
+### 9.4 Token Rate Limiting
+
+Token limits are set per model per group in `MaaSSubscription.spec.modelRefs[].tokenRateLimits`. The maas-controller translates each subscription into a Kuadrant `TokenRateLimitPolicy` in the model namespace. Limitador enforces the limits per user (`auth.identity.userid`) using the token usage from each response.
+
+**Allowed window units:** `s`, `m`, `h` only — days are not supported, use `24h`.
+
+**Current limits on this cluster:**
+
+| Model | Groups | Limit |
+|---|---|---|
+| `qwen3-8b` | `cluster-admins`, `tier-free-users` | 100,000 tokens / 1h |
+| `opt-125m` | `cluster-admins`, `tier-free-users` | 200,000 tokens / 1h |
+
+**Change limits** — edit the `MaaSSubscription` directly:
+
+```bash
+oc edit maassubscription free-tier-subscription -n models-as-a-service
+```
+
+Or patch a specific model's limit:
+
+```bash
+oc patch maassubscription free-tier-subscription -n models-as-a-service --type=merge -p '{
+  "spec": {
+    "modelRefs": [
+      {
+        "name": "qwen3-8b",
+        "namespace": "llm-d-demo",
+        "tokenRateLimits": [{"limit": 50000, "window": "1h"}]
+      },
+      {
+        "name": "opt-125m",
+        "namespace": "llm-d-demo",
+        "tokenRateLimits": [{"limit": 200000, "window": "1h"}]
+      }
+    ]
+  }
+}'
+```
+
+**Stack multiple windows** on the same model (e.g. burst cap + daily cap):
+
+```yaml
+tokenRateLimits:
+  - limit: 10000
+    window: 1m
+  - limit: 500000
+    window: 24h
+```
+
+**Give different groups different limits** — create separate subscriptions, one per group:
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: premium-subscription
+  namespace: models-as-a-service
+spec:
+  owner:
+    groups:
+      - name: premium-group
+  modelRefs:
+    - name: qwen3-8b
+      namespace: llm-d-demo
+      tokenRateLimits:
+        - limit: 1000000
+          window: 1h
+```
+
+A user in multiple groups gets whichever subscription they present via the `x-maas-subscription` request header. Without that header the first matching subscription applies.
+
+**Verify the generated policy:**
+
+```bash
+oc get tokenratelimitpolicy -n llm-d-demo
+oc get tokenratelimitpolicy maas-trlp-qwen3-8b -n llm-d-demo -o yaml
+```
+
+### 9.5 MaaS Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| `HTTPRoutesReady: False` — `NotAllowedByListeners` | Model namespace not in Gateway `allowedRoutes` | Re-apply gateway chart with `--set "gateway.modelNamespaces={<ns>}"` |
+| `maas-api` pod not starting | Kuadrant CR not Ready or `maas-default-gateway` missing | Check `oc get kuadrant -n kuadrant-system` and `oc get gateway maas-default-gateway -n openshift-ingress` |
+| Kuadrant CR `Ready: False` — `MissingDependency` on OCP 4.19+ | Operator started before detecting OCP built-in Gateway API | Delete the operator pod to force a restart: `oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator` |
+| No `AuthConfig` resources after enabling MaaS | Kuadrant operator not running / CR not Ready | Verify `oc get kuadrant -n kuadrant-system` shows `Ready: True` |
+| `POST /maas-api/v1/api-keys` returns `500` | Authorino TLS not configured; Envoy→Authorino connection uses plain gRPC but Authorino expects TLS | Run Step 4 (Authorino TLS) then remove+re-add the gateway `authorino-tls-bootstrap` annotation |
+| `maas-default-gateway-authn-ssl` EnvoyFilter missing | Gateway annotation applied before Authorino TLS was enabled | Remove annotation (`oc annotate gateway ... security.opendatahub.io/authorino-tls-bootstrap-`) then re-add it |
+| `401 Unauthorized` on model calls | Using OpenShift token directly — MaaS requires `sk-oai-*` API key | Create an API key via `POST /maas-api/v1/api-keys` with an OCP Bearer token |
+| `403 Forbidden` on model calls | User's group not in `MaaSAuthPolicy.spec.subjects` | Add the group to the `MaaSAuthPolicy` and verify `MaaSSubscription` includes the model |
+| `maas-api` returns `404` on `/v1/api-keys` | `DB_CONNECTION_URL` not injected into `maas-api` deployment | Patch the deployment (Step 5c) |
+
+---
+
 ## Appendix A — Quick-Reference Commands
 
 ```bash
@@ -950,6 +1287,8 @@ oc logs -f -l app.kubernetes.io/component=llminferenceservice-router-scheduler -
 | No hardware profiles in RHOAI dashboard | `kueue.openshift.io/managed=true` on namespace but Kueue not installed or no `Queue`-type profiles exist | Either remove the label (`oc label namespace <ns> kueue.openshift.io/managed-`) or create `Queue`-type hardware profiles with a matching LocalQueue |
 | Hardware profiles missing after toggling `disableKueue` | Dashboard does not reload config automatically | Restart the dashboard: `oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications` |
 | model-catalog API returns 500 errors | PostgreSQL schema empty (migrations did not apply) | Restart model-catalog: `oc rollout restart deployment/model-catalog -n rhoai-model-registries` |
+| `LLMInferenceService` `HTTPRoutesReady: False` — `NotAllowedByListeners` | Model namespace missing from MaaS Gateway `allowedRoutes` | Re-apply gateway chart: `helm template gitops/instance/maas/gateway ... --set "gateway.modelNamespaces={<ns>}" \| oc apply -f -` |
+| Kuadrant CR `Ready: False` — `MissingDependency (istio/envoy gateway)` on OCP 4.19+ | Operator pod started before detecting OCP built-in Gateway API | `oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator` |
 
 ---
 
@@ -957,7 +1296,7 @@ oc logs -f -l app.kubernetes.io/component=llminferenceservice-router-scheduler -
 
 | Resource | URL |
 | --- | --- |
-| RHOAI 3.3 Documentation | https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.3 |
+| RHOAI 3.4 Documentation | https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4 |
 | Supported Configurations 3.x | https://access.redhat.com/articles/rhoai-supported-configs-3.x |
 | Supported Hardware Configurations | https://docs.redhat.com/en/documentation/red_hat_ai/3/html/supported_product_and_hardware_configurations/index |
 | llm-d Release Component Versions | https://access.redhat.com/articles/7136620 |
@@ -965,4 +1304,6 @@ oc logs -f -l app.kubernetes.io/component=llminferenceservice-router-scheduler -
 | cert-manager on OpenShift | https://docs.openshift.com/container-platform/4.20/security/cert_manager_operator/index.html |
 | ocp-secured-integration (cert-manager GitOps) | https://github.com/alvarolop/ocp-secured-integration |
 | RHOAI GitOps reference | https://github.com/alvarolop/rhoai-gitops |
+| RHOAI 3.4 MaaS Documentation | https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/govern_llm_access_with_models-as-a-service/ |
+| MaaS upstream (opendatahub-io) | https://github.com/opendatahub-io/models-as-a-service |
 | llm-d upstream project | https://github.com/llm-d/llm-d |
