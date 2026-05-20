@@ -6,7 +6,7 @@ metadata:
   name: {{ .Values.gateway.name }}
   namespace: {{ .Values.gateway.namespace }}
 spec:
-  host: "{{ .Values.gateway.name }}-{{ .Values.gateway.namespace }}.{{ .Values.clusterDomain }}"
+  host: "{{ .Values.subdomain }}.{{ .Values.clusterDomain }}"
   to:
     kind: Service
     name: {{ .Values.gateway.name }}-{{ .Values.gateway.className }}

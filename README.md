@@ -144,7 +144,7 @@ The **Red Hat OpenShift AI operator** is installed from OperatorHub via a Subscr
 
 | Goal | OLM channel | Example `startingCSV` |
 | --- | --- | --- |
-| GA stable 3.3.x (default for this guide) | `stable-3.x` | `rhods-operator.3.3.2` |
+| GA stable 3.4 (default for this guide) | `stable-3.x` | `rhods-operator.3.4.0` |
 | 3.4 early access | `beta` | `rhods-operator.3.4.ea2` |
 
 Early access builds are published on the **beta** channel; GA releases use **stable-3.x**. Pin the CSV you want with `startingCSV` so upgrades are predictable.
@@ -153,7 +153,7 @@ Set **`RHOAI_OLM_PROFILE`** when rendering the operator chart (defaults to stabl
 
 | `RHOAI_OLM_PROFILE` | Effect |
 | --- | --- |
-| `stable` (default) | `channel: stable-3.x`, `startingCSV: rhods-operator.3.3.2` |
+| `stable` (default) | `channel: stable-3.x`, `startingCSV: rhods-operator.3.4.0` |
 | `ea` | `channel: beta`, `startingCSV: rhods-operator.3.4.ea2` |
 
 You can instead edit `gitops/operators/rhoai/values.yaml` (`olmProfile` or explicit `channel` / `startingCSV`) or pass `--set olmProfile=ea` to `helm template`.
@@ -184,6 +184,8 @@ Leave the defaults as shown and click **Install**.
 
 ### 3.1 Cert-Manager Operator and Let's Encrypt Certificate Issuer
 
+> **AWS credential flow (IRSA):** On AWS, the cert-manager chart (`cloud=aws`) creates a `CredentialsRequest` in `openshift-cloud-credential-operator`. The OpenShift Cloud Credential Operator (CCO) reads this request and automatically provisions a scoped IAM credential into an `aws-creds` Secret in the `cert-manager` namespace. The Secret contains `aws_access_key_id` and `aws_secret_access_key` entries tied to a policy that allows only the Route53 actions needed for DNS-01 challenge solving (`route53:GetChange`, `ChangeResourceRecordSets`, `ListResourceRecordSets`, `ListHostedZonesByName`). No manual AWS credential input is required — CCO handles the full lifecycle. Verify the secret was provisioned: `oc get secret aws-creds -n cert-manager`.
+
 #### RBAC Permissions for cert-manager and supporting components
 
 Grant cert-manager the permissions it needs for Certificates, CertificateRequests, Orders, Challenges, ClusterIssuers, Issuers, and optional monitoring integration:
@@ -191,9 +193,20 @@ Grant cert-manager the permissions it needs for Certificates, CertificateRequest
 `CLOUD` can be **none** or **aws**, change it to **aws** if running on **AWS**.
 
 ```bash
-CLOUD=none
-helm template gitops/operators/cert-manager-operator-helm/ --set cloud=${CLOUD} --name-template test | oc apply -f -
+CLOUD=aws   # or "none" for bare metal / non-AWS
+helm template gitops/operators/cert-manager-operator --set cloud=${CLOUD} --name-template cert-manager | oc apply -f -
 ```
+
+> **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reaches `Succeeded`. This is expected. Wait for the CSV, then run the same command a second time — it applies cleanly:
+> ```bash
+> # Wait for CSV
+> oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
+>   -n cert-manager-operator \
+>   -l operators.coreos.com/openshift-cert-manager-operator.cert-manager-operator= \
+>   --timeout=300s
+> # Second pass — applies the CertManager CR
+> helm template gitops/operators/cert-manager-operator --set cloud=${CLOUD} --name-template cert-manager | oc apply -f -
+> ```
 
 If you want to use ArgoCD:
 
@@ -357,8 +370,6 @@ oc get certificates.cert-manager.io --all-namespaces \
   -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,STATUS:.status.conditions[0].type,READY:.status.conditions[0].status'
 ```
 
-> **Note (direct helm apply):** The first `helm template gitops/operators/cert-manager-operator | oc apply -f -` will fail on the `CertManager` CR because the operator CRD is not registered until the CSV reaches `Succeeded`. Wait for the CSV, then re-run the command — it applies cleanly on the second pass.
-
 ### 3.2 GPU and Hardware Dependencies
 
 | Operator | Channel | Source | Purpose |
@@ -411,15 +422,24 @@ See: [NVIDIA GPU Operator on Red Hat OpenShift Container Platform](https://docs.
 
 #### Adding A10G GPU nodes in AWS with MachineSets
 
+> **Before running:** decide how many availability zones you want GPU nodes in.
+> - **All 3 AZs** (`a b c`) — recommended for production; provides HA and lets the scheduler spread pods. Creates 3 MachineSets, one per AZ (each with `replicas: 1` by default = 3 GPU nodes total).
+> - **Single AZ** — sufficient for a single-model test deployment; cheaper. Replace `for AZ in a b c` with `for AZ in a` (or whichever AZ your cluster uses).
+>
+> The `AMI_ID` must be the same RHCOS AMI used by your existing worker nodes. Retrieve it from a running MachineSet: `oc get machineset -n openshift-machine-api <name> -o jsonpath='{.spec.template.spec.providerSpec.value.ami.id}'`
+
 ```bash
 export INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
 export AWS_REGION="${AWS_REGION:=eu-west-1}"
-export AMI_ID="${AMI_ID:=ami-0b8c325b7499597c6}"
+# Get the RHCOS AMI from an existing worker MachineSet:
+export AMI_ID=$(oc get machineset -n openshift-machine-api \
+  -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}')
 export AWS_INSTANCE_TYPE="${AWS_INSTANCE_TYPE:=g5.2xlarge}"
 export AWS_INSTANCES_PER_AZ=${AWS_INSTANCES_PER_AZ:=1}
 
 echo "INFRA_ID=${INFRA_ID}, AWS_REGION=${AWS_REGION}, AMI_ID=${AMI_ID}, AWS_INSTANCE_TYPE=${AWS_INSTANCE_TYPE}"
 
+# All 3 AZs (production). Change to "for AZ in a" for a single-AZ test setup.
 for AZ in a b c; do
   helm template gpu-worker ./gitops/instance/machine-sets/gpu-worker \
     --set infrastructureId="${INFRA_ID}" \
@@ -524,7 +544,7 @@ oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator \
 > profiles with `scheduling.type: Queue` — standard `Node`-type profiles become invisible unless
 > matching `Queue`-type profiles and LocalQueues are also configured.
 >
-> **Known issue (RHOAI 3.3.0):** The dashboard does not reload its configuration when `disableKueue`
+> **Known issue:** The dashboard does not reload its configuration when `disableKueue`
 > is toggled in `OdhDashboardConfig`. Restart the dashboard after any change:
 > `oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications`
 
@@ -932,14 +952,15 @@ Access control is CRD-based: `MaaSSubscription` defines token rate limits per mo
 
 | Requirement | Chart / Command |
 | --- | --- |
-| RHOAI 3.4 with `kserve: Managed` and `modelsAsService: Managed` | `gitops/instance/rhoai` (set `modelsAsService: true` in values) |
+| RHOAI 3.4 with `kserve: Managed` and `modelsAsService: Managed` | Step 4 below — re-apply `gitops/instance/rhoai` with `--set modelsAsService=true` **after** gateway and database are ready |
 | Red Hat Connectivity Link v1.2+ installed | `gitops/operators/connectivity-link` |
 | **Kuadrant CR** in `kuadrant-system` | `gitops/instance/maas/connectivity-link` |
 | cert-manager Operator | `gitops/operators/cert-manager-operator` |
 | LeaderWorkerSet Operator | `gitops/operators/leader-worker-set` |
 | `GatewayClass` (`openshift.io/gateway-controller`) | created by `gitops/instance/maas/gateway` |
 | Gateway `maas-default-gateway` in `openshift-ingress` | created by `gitops/instance/maas/gateway` |
-| OCP 4.20+ | version check: `oc version` |
+| **PostgreSQL database** (`maas-db-config` secret in `redhat-ods-applications`) | `gitops/instance/maas/database` — Step 3 below |
+| OCP 4.21 | version check: `oc version` |
 
 ### 9.2 Install Steps
 
@@ -968,11 +989,39 @@ oc get gateway maas-default-gateway -n openshift-ingress
 
 > **Important:** Every namespace that contains MaaS-published `LLMInferenceService` resources must be listed in `gateway.modelNamespaces`. If a namespace is missing, the HTTPRoute will be rejected with `NotAllowedByListeners` and the `LLMInferenceService` will show `HTTPRoutesReady: False`.
 
-**Step 3 — Enable MaaS in the DataScienceCluster:**
+**Step 3 — MaaS Database** (PostgreSQL + `maas-db-config` secret):
+
+The `maas-api` pod will not start without a PostgreSQL database. The chart in `gitops/instance/maas/database` deploys a PostgreSQL instance in `redhat-ods-applications` and creates the `maas-db-config` secret that `maas-api` reads for its `DB_CONNECTION_URL`.
+
+> **Password handling:** `helm template` skips the `lookup` function, so the password cannot be auto-generated — you must provide one explicitly. Generate a random password and pass it with `--set db.password=<password>`. Keep the password; you will need it for upgrades (`helm upgrade` can reuse it via lookup, but `helm template | oc apply` cannot).
 
 ```bash
-oc patch datasciencecluster default-dsc --type=merge \
-  -p '{"spec":{"components":{"kserve":{"modelsAsService":{"managementState":"Managed"}}}}}'
+DB_PASSWORD=$(openssl rand -base64 18 | tr -d '+/=' | head -c 24)
+echo "Save this DB password: ${DB_PASSWORD}"
+
+helm template gitops/instance/maas/database \
+  --name-template maas-database \
+  --namespace redhat-ods-applications \
+  --set db.password="${DB_PASSWORD}" | oc apply -n redhat-ods-applications -f -
+
+# Wait for the database pod to be Ready
+oc wait --for=condition=ready pod -l app=maas-db \
+  -n redhat-ods-applications --timeout=120s
+
+# Verify the secret was created
+oc get secret maas-db-config -n redhat-ods-applications
+```
+
+**Step 4 — Enable MaaS in the DataScienceCluster:**
+
+> **Why this order matters:** `modelsAsService` is kept `false` in `gitops/instance/rhoai/values.yaml` during Phase 3 (RHOAI install). The `maas-api` pod requires both the MaaS gateway (Step 2) and the database secret (Step 3) to exist before it can start. Re-apply the chart here, after both are in place.
+
+```bash
+helm template rhoai ./gitops/instance/rhoai --set modelsAsService=true | oc apply -f -
+
+# Wait for maas-api to start
+oc wait --for=condition=ready pod -l app.kubernetes.io/name=maas-api \
+  -n redhat-ods-applications --timeout=120s
 oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
 ```
 
@@ -1125,14 +1174,19 @@ EOF
 
 ```bash
 oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge \
-  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"modelAsService":true,"maasAuthPolicies":true}}}'
+  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"modelAsService":true,"maasAuthPolicies":true,"vLLMDeploymentOnMaaS":true}}}'
 ```
+
+> **Note:** The `maas-ui` sidecar in the dashboard discovers the MaaS API at `https://maas.<cluster-domain>/maas-api`.
+> This requires the MaaS gateway OCP Route (created by the gateway chart in Step 1) to use hostname `maas.<cluster-domain>`.
+> If you see 500 errors on the API keys page, verify the gateway route hostname: `oc get route maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.host}'` — it must be `maas.<cluster-domain>`, not `maas-default-gateway-openshift-ingress.<cluster-domain>`. If wrong, re-apply the gateway chart.
 
 **Verify end-to-end — generate and use an API key:**
 
 ```bash
 TOKEN=$(oc whoami -t)
-MAAS_GW="maas-default-gateway-openshift-ingress.apps.<cluster-domain>"
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+MAAS_GW="maas.${CLUSTER_DOMAIN}"
 
 # Create an API key
 curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
@@ -1247,6 +1301,9 @@ oc get tokenratelimitpolicy maas-trlp-qwen3-8b -n llm-d-demo -o yaml
 | `401 Unauthorized` on model calls | Using OpenShift token directly — MaaS requires `sk-oai-*` API key | Create an API key via `POST /maas-api/v1/api-keys` with an OCP Bearer token |
 | `403 Forbidden` on model calls | User's group not in `MaaSAuthPolicy.spec.subjects` | Add the group to the `MaaSAuthPolicy` and verify `MaaSSubscription` includes the model |
 | `maas-api` returns `404` on `/v1/api-keys` | `DB_CONNECTION_URL` not injected into `maas-api` deployment | Patch the deployment (Step 5c) |
+| Dashboard API keys / auth policies page returns `500` | Gateway OCP Route uses wrong hostname (`maas-default-gateway-openshift-ingress.*`) instead of `maas.*`; `maas-ui` sidecar gets HTML 503 | Re-apply the gateway chart — the chart now always uses `subdomain.<clusterDomain>` |
+| Gen AI studio → API keys or Settings → Authorization policies tabs missing | `vLLMDeploymentOnMaaS: false` or `maasAuthPolicies: false` in `OdhDashboardConfig` | Apply Step 7 patch (all four flags) and restart the dashboard |
+| Kueue UI options visible in dashboard but Kueue not installed | `disableKueue: false` hardcoded in `OdhDashboardConfig` | `oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge -p '{"spec":{"dashboardConfig":{"disableKueue":true}}}'` then restart dashboard |
 
 ---
 

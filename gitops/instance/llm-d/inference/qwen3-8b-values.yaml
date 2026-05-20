@@ -1,5 +1,7 @@
 deploymentType: intelligent-inference
 serviceName: qwen3-8b
+# replicas: 2 assumes 3-AZ clusters with 1 GPU node per AZ (3 total).
+# Single-AZ / single GPU node clusters: override with --set replicas=1 on helm template.
 replicas: 2
 
 model:
@@ -21,9 +23,12 @@ resources:
 
 hardwareProfile:
   namespace: redhat-ods-applications
-  name: nvidia
+  name: nvidia-a10g-profile
 
 vllmAdditionalArgs: "--disable-uvicorn-access-log --enable-auto-tool-choice --tool-call-parser hermes"
 
+# Enable maas: true only after completing Phase 6 (MaaS gateway + Kuadrant policies).
+# Setting it true here before the MaaS stack is in place causes maas-controller reconcile
+# errors and does not enable MaaS — it must be toggled after the gateway is ready.
 maas:
-  enabled: true
+  enabled: false

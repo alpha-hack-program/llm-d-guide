@@ -39,7 +39,7 @@ llm-d-guide/
 │       └── maas/
 │           ├── connectivity-link/   # Kuadrant CR (kuadrant-system namespace + Kuadrant instance)
 │           ├── gateway/             # GatewayClass + maas-default-gateway Helm chart
-│           ├── rbac/                # OpenShift Groups for MaaS tier-based access control
+│           ├── rbac/                # OpenShift Groups for MaaS subscription-based access control
 │           ├── database/            # MaaS API backing store
 │           └── monitoring/          # Grafana dashboards + Prometheus rules for MaaS
 ├── metallb/                         # MetalLB config (bare metal only)
@@ -170,12 +170,41 @@ oc get certificates.cert-manager.io --all-namespaces \
 
 **Goal:** Add GPU worker nodes and install the hardware detection and driver stack.
 
+**Before starting Phase 2 — ask the user:**
+> "How many availability zones do you want GPU nodes in?
+> - **All 3 AZs** (a, b, c) — recommended for production; 3 GPU nodes total (1 per AZ).
+> - **Single AZ** — sufficient for a single-model test; cheaper, faster to provision.
+> Which would you like?"
+
+Do NOT decide this yourself — the number of GPU nodes affects cost and scheduling decisions that belong to the user.
+
 **Install order:**
-1. NFD operator — `bash gitops/operators/nfd/install.sh` (dynamically resolves channel + CSV from `packagemanifest`; or via OperatorHub: search "Node Feature Discovery", namespace `openshift-nfd`)
-2. NVIDIA GPU Operator — `bash gitops/operators/nvidia/install.sh` (dynamically resolves channel + CSV; or via OperatorHub: search "NVIDIA GPU Operator", namespace `nvidia-gpu-operator`)
-3. `NodeFeatureDiscovery` CR — `oc apply -k gitops/instance/nfd` (after NFD CSV is `Succeeded`)
-4. `ClusterPolicy` CR — `oc apply -k gitops/instance/nvidia` (after NVIDIA CSV is `Succeeded`)
-5. GPU MachineSets (AWS only — use the Helm chart in `gitops/instance/machine-sets/gpu-worker`)
+1. GPU MachineSets (AWS only) — start node provisioning first so nodes are ready by the time operators finish installing:
+   ```bash
+   export INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
+   export AWS_REGION="${AWS_REGION:=eu-west-1}"
+   export AMI_ID=$(oc get machineset -n openshift-machine-api \
+     -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}')
+   export AWS_INSTANCE_TYPE="${AWS_INSTANCE_TYPE:=g5.2xlarge}"
+   export AWS_INSTANCES_PER_AZ=1
+
+   # All 3 AZs → 3 MachineSets, one per AZ (3 GPU nodes total)
+   # Single AZ → replace "a b c" with just "a" (or the user's chosen AZ)
+   for AZ in a b c; do
+     helm template gpu-worker ./gitops/instance/machine-sets/gpu-worker \
+       --set infrastructureId="${INFRA_ID}" \
+       --set region=${AWS_REGION} \
+       --set instanceType=${AWS_INSTANCE_TYPE} \
+       --set amiId="${AMI_ID}" \
+       --set devicePluginConfig="" \
+       --set az=${AZ} | oc apply -f -
+   done
+   ```
+   Use the AZ choice the user confirmed above. **Do not default to a single AZ** without explicit user approval — 3 AZs means 3 separate MachineSets, 3 GPU nodes.
+2. NFD operator — `bash gitops/operators/nfd/install.sh` (dynamically resolves channel + CSV from `packagemanifest`; or via OperatorHub: search "Node Feature Discovery", namespace `openshift-nfd`)
+3. NVIDIA GPU Operator — `bash gitops/operators/nvidia/install.sh` (dynamically resolves channel + CSV; or via OperatorHub: search "NVIDIA GPU Operator", namespace `nvidia-gpu-operator`)
+4. `NodeFeatureDiscovery` CR — `oc apply -k gitops/instance/nfd` (after NFD CSV is `Succeeded`)
+5. `ClusterPolicy` CR — `oc apply -k gitops/instance/nvidia` (after NVIDIA CSV is `Succeeded`)
 
 **Key wait conditions:**
 ```bash
@@ -360,7 +389,7 @@ spec:
 EOF
 ```
 
-> ⚠️ **Known issue (RHOAI 3.3.0):** The RHOAI dashboard does not reload its configuration
+> ⚠️ **Known issue:** The RHOAI dashboard does not reload its configuration
 > when `disableKueue` is changed in `OdhDashboardConfig`. The dashboard keeps labeling new projects
 > with `kueue.openshift.io/managed=true` until it is restarted (`oc rollout restart deployment/rhods-dashboard`).
 > Even after restart, the label may persist if the dashboard's internal cache is not cleared.
@@ -401,8 +430,10 @@ oc get csv -n openshift-operators -w | grep -E "pipelines"
 **Known gotchas:**
 - Apply connectivity-link first — Authorino must be running before RHOAI configures authentication.
 - After the RHCL operator is ready, create the Kuadrant CR: `helm template gitops/instance/maas/connectivity-link --name-template maas-connectivity-link | oc apply -f -`. Without this CR, Authorino and Limitador pods are not deployed and MaaS auth/rate-limiting is silently unenforced. If the CR stays `Ready: False` with `MissingDependency (istio/envoy gateway)` on OCP 4.19+, delete and restart the operator pod — it will detect the OCP built-in Gateway API on the next start.
+- **`modelsAsService` must be `false` during Phase 3.** The `maas-api` pod requires both the MaaS gateway AND the `maas-db-config` database secret to exist before it can start. Enabling it before Phase 6 Step 4 (after gateway and database are ready) leaves the DataScienceCluster `Not Ready (modelsasservice)` with no maas-api pod. The default in `values.yaml` is already `false`; do not override it to `true` here. Enable it in Phase 6 Step 4 by re-applying the chart.
 - `helm template rhoai | oc apply` may fail if CRDs aren't established yet. The wait commands above prevent this, but re-run them if you hit `resource mapping not found`.
 - `helm template rhoai | oc apply` may also fail on `OdhDashboardConfig` on the first pass — the CRD is registered only after the Dashboard component initialises. Wait for `oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io` and re-run.
+- **`OdhDashboardConfig` apply fails with `DEPRECATED: spec.dashboardConfig.mlflow must be removed`** — the `mlflow` field in `OdhDashboardConfig` was deprecated and the API server now rejects it. Remove the `mlflow:` line from `gitops/instance/rhoai/templates/odh-dashboard-config.yaml` if it is present. The current template has this removed already.
 - Switching RHOAI channel in-place (patching the Subscription) is unreliable. If you need to change channels, delete the Subscription and CSV first, then re-apply with the new `olmProfile`.
 - Leader Worker Set uses a retry loop (`until oc apply -k ...`) to handle install race conditions — this is expected behaviour, not an error.
 - Do NOT install OpenShift Service Mesh 2.x — its CRDs conflict with the llm-d gateway. Service Mesh 3.x is only for **Llama Stack Operator**; it is not required for base RHOAI or llm-d.
@@ -469,9 +500,107 @@ oc get pods -n redhat-ods-applications \
 - If the Gateway is not `PROGRAMMED=True`, check that Connectivity Link / Authorino is Running and the `GatewayClass` CR was created.
 - If the LLMInferenceService is stuck `Not Ready`, describe it: `oc describe llminferenceservice <name> -n <namespace>` and check events.
 - If `HTTPRoutesReady: False` with `NotAllowedByListeners`: the model namespace is missing from the MaaS gateway's `allowedRoutes`. Re-apply the gateway chart with `--set "gateway.modelNamespaces={<namespace>}"` (see README §9.2).
+- **Hardware profile name:** The admission webhook `hardwareprofile-llmisvc-injector.opendatahub.io` validates the profile name against existing `HardwareProfile` CRs in `redhat-ods-applications`. The chart in `gitops/instance/rhoai` creates three profiles: `gpu-profile`, `gpu-kueue-profile`, and `nvidia-a10g-profile`. The pre-existing `qwen3-8b-values.yaml` references `nvidia-a10g-profile`. Verify available profiles with `oc get hardwareprofile -n redhat-ods-applications` before applying the inference chart.
+- **`maas.enabled` in per-model values files:** Set `maas.enabled: false` when deploying in Phase 5 (llm-d only). Setting it `true` before the MaaS gateway and Kuadrant policies are in place (Phase 6) triggers reconcile errors in the maas-controller and does not enable MaaS. Flip it to `true` only during Phase 6 when publishing the model to MaaS.
 - For OCI model images (`registry.redhat.io/rhelai1/...`), ensure the cluster pull secret includes Red Hat registry credentials.
 - For MoE models (DeepSeek-R1, Mixtral), use the **Wide Expert-Parallelism** well-lit path which requires LeaderWorkerSet for multi-node orchestration.
 - **Model Registry / model-catalog API 500:** If migrations did not apply, restart model-catalog: `oc rollout restart deployment/model-catalog -n rhoai-model-registries` (README Appendix B).
+
+---
+
+## Phase 6 — MaaS
+
+**Goal:** Deploy the MaaS gateway, configure Authorino TLS, bootstrap the subscription stack, and verify end-to-end API key creation and model access.
+
+**Pre-flight checks the assistant must run before starting:**
+```bash
+# Kuadrant CR ready (Authorino + Limitador running)
+oc get kuadrant kuadrant -n kuadrant-system
+oc get pods -n kuadrant-system
+
+# LLMInferenceService(s) Ready
+oc get llminferenceservice -A
+
+# maas-api pod running
+oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
+```
+
+**Steps (follow README §9.2):**
+
+1. **MaaS Gateway** — apply the gateway chart with your cluster domain and model namespaces:
+   ```bash
+   CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+   helm template gitops/instance/maas/gateway --name-template maas-gateway \
+     --set clusterDomain="${CLUSTER_DOMAIN}" \
+     --set useOpenShiftRoute=true \
+     --set tls.secretName=ingress-certs \
+     --set "gateway.modelNamespaces={llm-d-demo}" | oc apply -f -
+   oc get gateway maas-default-gateway -n openshift-ingress
+   ```
+
+2. **MaaS Database** — deploy PostgreSQL and create the `maas-db-config` secret **before** enabling `modelsAsService`. The `maas-api` pod will not start without this secret. `helm template` skips `lookup`, so the password must be supplied explicitly:
+   ```bash
+   DB_PASSWORD=$(openssl rand -base64 18 | tr -d '+/=' | head -c 24)
+   echo "Save this DB password: ${DB_PASSWORD}"
+   helm template gitops/instance/maas/database --name-template maas-database \
+     --namespace redhat-ods-applications \
+     --set db.password="${DB_PASSWORD}" | oc apply -n redhat-ods-applications -f -
+   oc wait --for=condition=ready pod -l app=maas-db \
+     -n redhat-ods-applications --timeout=120s
+   oc get secret maas-db-config -n redhat-ods-applications
+   ```
+
+3. **Authorino TLS** — must be configured in order (4a → 4b → 4c → 4d). If the annotation is already present, remove then re-add it:
+   ```bash
+   # Remove annotation if already set, to force maas-controller to create the TLS EnvoyFilter
+   oc annotate gateway maas-default-gateway -n openshift-ingress \
+     security.opendatahub.io/authorino-tls-bootstrap-
+   oc annotate gateway maas-default-gateway -n openshift-ingress \
+     security.opendatahub.io/authorino-tls-bootstrap="true"
+   # Verify TLS EnvoyFilter was created
+   oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress
+   ```
+
+4. **Enable MaaS in the DataScienceCluster** — re-apply the RHOAI instance chart with `modelsAsService=true` **after** the gateway (Step 1) and database (Step 2) are ready:
+   ```bash
+   helm template rhoai ./gitops/instance/rhoai --set modelsAsService=true | oc apply -f -
+   oc wait --for=condition=ready pod -l app.kubernetes.io/name=maas-api \
+     -n redhat-ods-applications --timeout=120s
+   ```
+
+5. **Bootstrap subscription namespace** — `models-as-a-service` namespace + `default-tenant` CR (name is exact):
+   ```bash
+   oc create namespace models-as-a-service --dry-run=client -o yaml | oc apply -f -
+   ```
+
+6. **Register models** — create `MaaSModelRef`, `MaaSSubscription`, `MaaSAuthPolicy` in `models-as-a-service` (see README §9.2 Steps 6a–6c).
+
+7. **Enable dashboard flags** — all four must be `true`:
+   ```bash
+   oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge \
+     -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"modelAsService":true,"maasAuthPolicies":true,"vLLMDeploymentOnMaaS":true}}}'
+   oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications
+   ```
+
+8. **Smoke test** — create an API key and call a model:
+   ```bash
+   TOKEN=$(oc whoami -t)
+   MAAS_GW="maas.${CLUSTER_DOMAIN}"
+   curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
+     -H "Authorization: Bearer ${TOKEN}" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"test-key","expiresInDays":1}'
+   ```
+
+**Human gate:** API key creation returns HTTP 201 with a `sk-oai-*` key. Model call with that key returns HTTP 200.
+
+**Known gotchas:**
+- `POST /maas-api/v1/api-keys` returns `500`: Authorino TLS not configured, or the `maas-default-gateway-authn-ssl` EnvoyFilter is missing. Remove and re-add the `authorino-tls-bootstrap` annotation on the gateway (Step 2 above).
+- **500 errors on API keys / authorization policies pages** — gateway OCP Route has wrong hostname. Check: `oc get route maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.host}'` must be `maas.<cluster-domain>`. If it shows `maas-default-gateway-openshift-ingress.<cluster-domain>`, re-apply the gateway chart (the chart had a bug where `useOpenShiftRoute=true` used the wrong hostname format). Symptom in `maas-ui` sidecar logs: `statusCode=503 ... invalid character '<'`.
+- Gen AI studio → API keys or Settings → Authorization policies tabs missing in the dashboard: check all four `OdhDashboardConfig` flags — `vLLMDeploymentOnMaaS` is the most commonly missing one.
+- `LLMInferenceService` `HTTPRoutesReady: False` — `NotAllowedByListeners`: model namespace not in `gateway.modelNamespaces`. Re-apply the gateway chart with the correct namespace set.
+- `MaaSAuthPolicy` status loop in controller logs (`"failed to update MaaSAuthPolicy status"`) — harmless controller/CRD version mismatch. Auth and rate limiting work correctly despite this.
+- **EA2 → stable 3.4 migration only:** If `maas-controller` or `maas-api` Deployment shows an immutable selector error in the DSC, delete both Deployments and force a DSC reconcile — see `PATCH-MAAS.md §8`.
 
 ---
 

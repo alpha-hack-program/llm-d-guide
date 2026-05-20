@@ -47,7 +47,6 @@ spec:
     maasAuthPolicies: {{ if (.Values.modelsAsService | default false) }}true{{ else }}false{{ end }}
     modelAsService: {{ if (.Values.modelsAsService | default false) }}true{{ else }}false{{ end }}
     vLLMDeploymentOnMaaS: {{ if (.Values.modelsAsService | default false) }}true{{ else }}false{{ end }}
-    mlflow: {{ if (.Values.mlflow | default false) }}true{{ else }}false{{ end }}
   groupsConfig:
     adminGroups: {{ .Values.odhDashboardConfig.adminGroups | default "rhods-admins" }}
     allowedGroups: {{ .Values.odhDashboardConfig.allowedGroups | default "system:authenticated" }}

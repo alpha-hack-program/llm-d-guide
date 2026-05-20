@@ -9,7 +9,12 @@ odhApplicationsNamespace: redhat-ods-applications
 
 # --- Feature toggles (drive component managementState and dashboard visibility) ---
 featureStore: false         # Feast operator
-modelsAsService: true      # KServe models-as-service
+# modelsAsService MUST remain false during Phase 3 (RHOAI install).
+# The MaaS component (maas-api pod) depends on the MaaS gateway being present first.
+# Enabling it before the gateway is created leaves the DataScienceCluster Not Ready
+# (modelsasservice component stuck) and the maas-api pod never starts.
+# Enable it in Phase 5 (MaaS) by re-applying: helm template rhoai ./gitops/instance/rhoai --set modelsAsService=true | oc apply -f -
+modelsAsService: false     # KServe models-as-service — enable in Phase 5 (MaaS), not here
 distributedWorkloads: false # Distributed workloads
 kueue: false                 # Kueue operator
 llamaStack: true            # LlamaStack operator
@@ -67,7 +72,37 @@ hardwareProfiles:
   profiles:
     - name: gpu-profile
       displayName: gpu-profile
-      description: "Provides a baseline hardware profile for GPU workloads with 1 GPU, 1 CPUs and 12Gi memory by default, adjustable up to 4 GPUs, 8 CPUs and 24Gi memory."
+      description: "Generic GPU profile — GPU toleration only, no Kueue, no product nodeSelector. Works with any NVIDIA GPU when Kueue is not installed."
+      disabled: false
+      dashboardFeatureVisibility: "[]"
+      identifiers:
+        - defaultCount: "1"
+          displayName: CPU
+          identifier: cpu
+          maxCount: "8"
+          minCount: 1
+          resourceType: CPU
+        - defaultCount: 12Gi
+          displayName: Memory
+          identifier: memory
+          maxCount: 32Gi
+          minCount: 1Gi
+          resourceType: Memory
+        - defaultCount: 1
+          displayName: GPU
+          identifier: nvidia.com/gpu
+          maxCount: 4
+          minCount: 1
+          resourceType: Accelerator
+      scheduling:
+        node:
+          tolerations:
+            - effect: NoSchedule
+              key: nvidia.com/gpu
+              operator: Exists
+    - name: gpu-kueue-profile
+      displayName: gpu-kueue-profile
+      description: "GPU profile with Kueue LocalQueue scheduling. Only visible when kueue: true and a matching LocalQueue named 'default' exists in the workload namespace."
       disabled: false
       dashboardFeatureVisibility: "[]"
       identifiers:
@@ -98,9 +133,9 @@ hardwareProfiles:
             - effect: NoSchedule
               key: nvidia.com/gpu
               operator: Exists
-    - name: nvidiaa10g-profile
+    - name: nvidia-a10g-profile
       displayName: nvidia-a10g-profile
-      description: "Provides a hardware profile for A10G GPUs with 1 GPU, 1 CPUs and 12Gi memory by default, adjustable up to 4 GPUs, 8 CPUs and 24Gi memory."
+      description: "A10G-specific GPU profile — targets nodes labelled nvidia.com/gpu.product: NVIDIA-A10G. Use when the cluster has mixed GPU types and you need to pin to A10G nodes."
       disabled: false
       dashboardFeatureVisibility: "[]"
       identifiers:
@@ -124,7 +159,6 @@ hardwareProfiles:
           resourceType: Accelerator
       scheduling:
         node:
-          # by product name
           nodeSelector:
             nvidia.com/gpu.product: NVIDIA-A10G
           tolerations:

@@ -79,7 +79,7 @@ spec:
   listeners:
   {{- if .Values.tls.secretName }}
   - name: https
-    hostname: "{{ if .Values.useOpenShiftRoute }}{{ .Values.gateway.name }}-{{ .Values.gateway.namespace }}.{{ .Values.clusterDomain }}{{ else }}{{ .Values.subdomain }}.{{ .Values.clusterDomain }}{{ end }}"
+    hostname: "{{ .Values.subdomain }}.{{ .Values.clusterDomain }}"
     port: 443
     protocol: HTTPS
     tls:
@@ -104,7 +104,7 @@ spec:
             {{- end }}
   {{- else }}
   - name: http
-    hostname: "{{ if .Values.useOpenShiftRoute }}{{ .Values.gateway.name }}-{{ .Values.gateway.namespace }}.{{ .Values.clusterDomain }}{{ else }}{{ .Values.subdomain }}.{{ .Values.clusterDomain }}{{ end }}"
+    hostname: "{{ .Values.subdomain }}.{{ .Values.clusterDomain }}"
     port: 80
     protocol: HTTP
     allowedRoutes:

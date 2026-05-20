@@ -31,6 +31,20 @@ is printed before the YAML output.
 
 ## MaaS — key facts and gotchas
 
+### `modelsAsService` must be enabled AFTER the MaaS gateway is ready
+
+`gitops/instance/rhoai/values.yaml` defaults to `modelsAsService: false`. Do NOT enable it during
+Phase 3 (RHOAI install). The `maas-api` pod will not start until the `maas-default-gateway` exists
+in `openshift-ingress`. Enabling it before the gateway is created leaves the DataScienceCluster
+`Not Ready (modelsasservice)` with no maas-api pod.
+
+**Correct order:**
+1. Phase 3: apply `gitops/instance/rhoai` with `modelsAsService: false` (the default)
+2. Phase 5 Step 1: deploy the MaaS gateway (`gitops/instance/maas/gateway`)
+3. Phase 5 Step 2: deploy the MaaS database (`gitops/instance/maas/database`) — creates `maas-db-config` secret
+4. Phase 5 Step 4: re-apply with `modelsAsService=true` — maas-api can now start because both gateway and db are ready:
+   `helm template rhoai ./gitops/instance/rhoai --set modelsAsService=true | oc apply -f -`
+
 ### Kuadrant CR is mandatory
 
 The RHCL operator installs CRDs but does **not** deploy Authorino or Limitador pods until a
@@ -143,9 +157,17 @@ MaaS uses `Tenant`, `MaaSModelRef`, `MaaSSubscription`, and `MaaSAuthPolicy` CRs
 the `models-as-a-service` namespace. The maas-controller watches this namespace but does nothing
 until the namespace and a `Tenant` CR named exactly `default-tenant` exist.
 
-**DB injection required:** The `maas-api` deployment does NOT have `DB_CONNECTION_URL` in its
-env vars by default. Without it, `/v1/api-keys` returns 404. Patch it in from the
-`maas-db-config` secret in `redhat-ods-applications`.
+**Database is a hard prerequisite — deploy before enabling `modelsAsService`:** The `maas-api`
+pod will not start without a `maas-db-config` Secret in `redhat-ods-applications` containing
+`DB_CONNECTION_URL`. On a clean install this secret does **not** exist until the database chart
+is applied (`gitops/instance/maas/database`). The maas-controller checks for this secret when
+reconciling the `default-tenant` CR and reports `PrerequisitesNotMet` until it exists. Always
+deploy the database (Phase 5 Step 2) before enabling `modelsAsService` (Phase 5 Step 4).
+
+**DB injection (EA2 → stable migration only):** After upgrading from `3.4.0-ea.2` to `3.4.0`
+stable the `maas-api` Deployment may additionally lack the `DB_CONNECTION_URL` env var reference
+(not just the secret) because the stable operator did not re-reconcile the EA2 Deployment. Without
+it `/v1/api-keys` returns 404. Patch it in from the `maas-db-config` secret (see `PATCH-MAAS.md §3`).
 
 **MaaSAuthPolicy status bug:** The maas-controller successfully creates Kuadrant `AuthPolicy` and
 `TokenRateLimitPolicy` resources, but fails to update the `MaaSAuthPolicy` status subresource
@@ -177,16 +199,24 @@ Current limits: `qwen3-8b` → 100k tokens/h, `opt-125m` → 200k tokens/h (both
 
 Check: `oc get tokenratelimitpolicy -n llm-d-demo`
 
-### EA2 → stable 3.4 upgrade leaves missing `maas` OCP Route
+### `maas-ui` sidecar 500 errors — wrong gateway hostname (fresh installs)
 
-After upgrading from `3.4.0-ea.2` to `3.4.0` stable, the `maas-ui` sidecar in the dashboard
-fails to discover the MaaS API and Gen AI studio / API keys / Authorization policies tabs do not
-appear, even with `genAiStudio`, `modelAsService`, and `maasAuthPolicies` set to `true`.
+The `maas-ui` sidecar in the dashboard returns 500 errors on all API keys / authorization policies
+pages. Sidecar logs show: `statusCode=503 endpoint=https://maas.<cluster-domain>/maas-api/... invalid character '<'`.
 
-**Root cause:** The `maas-ui` sidecar auto-discovers `https://maas.<cluster-domain>/maas-api` by
-convention. The EA2 operator exposed the maas-api via an HTTPRoute through the MaaS gateway
-(not via a plain OCP Route), so `maas.<cluster-domain>` never existed. The stable 3.4 operator
-did not replace the EA2 resources because it saw their `platform.opendatahub.io/version: 3.4.0-ea.2` annotation.
+**Root cause:** The gateway chart had a bug — when `useOpenShiftRoute=true` the listener hostname
+and OCP Route host were both set to `maas-default-gateway-openshift-ingress.<cluster-domain>`, but
+the `maas-ui` sidecar always calls `maas.<cluster-domain>/maas-api/...` (using `subdomain: "maas"`).
+The ingress returned an HTML 503 for the unknown hostname, which the sidecar tried to JSON-parse.
+
+**Fix (applied in chart):** `gateway.yaml` and `route.yaml` now always use `subdomain.<clusterDomain>`
+regardless of `useOpenShiftRoute`. Re-apply the gateway chart to update both the Gateway listener
+and the OCP Route to `maas.<cluster-domain>`.
+
+On EA2 → stable upgrades: same symptom but additional cause — the EA2 operator exposed maas-api
+via an HTTPRoute (not an OCP Route), and the stable operator skipped reconciling those resources
+due to their `platform.opendatahub.io/version: 3.4.0-ea.2` annotation. Re-applying the gateway
+chart fixes this as well.
 
 **Fix:** Create the missing OCP Route manually and restart the dashboard:
 
@@ -218,12 +248,25 @@ oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications
 
 Verify: `curl -sk https://maas.${CLUSTER_DOMAIN}/health` should return `{"status":"healthy"}`.
 
-### `maasAuthPolicies` dashboard flag
+### MaaS dashboard flags
 
-`oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge -p '{"spec":{"dashboardConfig":{"maasAuthPolicies":true}}}'`
+Four `OdhDashboardConfig` flags must all be `true` for the full MaaS dashboard experience:
 
-Required in addition to `genAiStudio: true` and `modelAsService: true` to fully enable the MaaS
-dashboard experience in RHOAI 3.4.
+| Flag | Effect |
+|---|---|
+| `genAiStudio` | Gen AI studio section (not MaaS-exclusive) |
+| `modelAsService` | MaaS model serving toggle |
+| `maasAuthPolicies` | Settings → Authorization policies tab |
+| `vLLMDeploymentOnMaaS` | Gen AI studio → API keys tab |
+
+```bash
+oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge \
+  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"modelAsService":true,"maasAuthPolicies":true,"vLLMDeploymentOnMaaS":true}}}'
+```
+
+The chart (`gitops/instance/rhoai/templates/odh-dashboard-config.yaml`) sets all four
+automatically: `genAiStudio` is always `true`; the other three follow the `modelsAsService`
+values toggle.
 
 ### Kueue is NOT required for MaaS
 
@@ -243,12 +286,16 @@ dedicated `kuadrant-system` namespace. The `kuadrant-system` namespace is create
 
 ## Hardware profiles
 
-`gitops/instance/rhoai/values.yaml` defines two hardware profiles:
-- `gpu-profile` — uses `scheduling.kueue` (references a LocalQueue named `default`). Currently
-  inconsistent because `kueue: false` in the same file. Harmless for MaaS but will break
-  workbench scheduling on that profile if Kueue is not installed.
-- `nvidiaa10g-profile` — uses `scheduling.node` with `nvidia.com/gpu.product: NVIDIA-A10G`
-  nodeSelector. Safe to use.
+`gitops/instance/rhoai/values.yaml` defines three hardware profiles:
+- `gpu-profile` — generic GPU, `scheduling.type: Node` with only a GPU toleration. No Kueue
+  dependency, no product-specific nodeSelector. Safe for any NVIDIA GPU when Kueue is not installed.
+- `gpu-kueue-profile` — GPU profile that uses `scheduling.type: Queue` (Kueue LocalQueue). The
+  chart template gates this on the global `kueue: true` toggle; when `kueue: false` it silently
+  falls back to Node scheduling. Only use this profile when Kueue is installed and a LocalQueue
+  named `default` exists in the workload namespace.
+- `nvidia-a10g-profile` — `scheduling.type: Node` with `nodeSelector: nvidia.com/gpu.product: NVIDIA-A10G`
+  plus a GPU toleration. Use when the cluster has mixed GPU types and you need to pin to A10G nodes.
+  This is the profile referenced in `gitops/instance/llm-d/inference/qwen3-8b-values.yaml`.
 
 ---
 
