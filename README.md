@@ -1014,104 +1014,132 @@ Access control is CRD-based: `MaaSSubscription` defines token rate limits per mo
 flowchart TD
     CLIENT(["API client\nBearer: sk-oai-... or OCP token"])
 
+    subgraph AWS["AWS"]
+        ELB["router-default ELB\nexisting OCP router LoadBalancer\nshared with all OCP Routes"]
+    end
+
+    subgraph CTRL_PLANE["openshift.io/gateway-controller/v1  —  OCP built-in Gateway API controller"]
+        GC["GatewayClass\nname: openshift-default"]
+        CTRL(["controller\ncreates one Envoy Deployment\nper Gateway"])
+    end
+
     subgraph INGRESS["openshift-ingress"]
         direction TB
-        OCPR["OCP Route\nmaas-default-gateway\nhost: maas.apps.&lt;cluster&gt;\ntls: passthrough"]
-        GC["GatewayClass\nname: openshift-default\ncontrollerName:\n  openshift.io/gateway-controller/v1"]
-        GW["Gateway\nname: maas-default-gateway\nlisteners: HTTPS :443\nallowedRoutes: Selector\nannotation: authorino-tls-bootstrap=true"]
-        EF["EnvoyFilter\nmaas-default-gateway-authn-ssl\nAuthorino TLS gRPC cluster\n(created by maas-controller)"]
-        TP["TelemetryPolicy\nmaas-gateway-telemetry\nlabels: user / tier / model"]
+        HAPROXY["HAProxy  router-default\nreads SNI → finds passthrough Route\nforwards raw TCP to Envoy ClusterIP"]
+        OCPR["OCP Route  maas-default-gateway\nhost: maas.apps.&lt;cluster&gt;\ntls: passthrough\n(you create via helm chart)"]
+        GW["Gateway  maas-default-gateway\nspec.gatewayClassName: openshift-default\nlisteners: HTTPS :443\nallowedRoutes: Selector {llm-d-demo, ...}\nannotation: authorino-tls-bootstrap=true\n(you create via helm chart)"]
+        ENVOY["Envoy Deployment  maas-default-gateway-*\nimage: istio-proxyv2-rhel9\nService type: ClusterIP\n— terminates TLS\n— calls Authorino gRPC/TLS (via EnvoyFilter)\n— calls Limitador gRPC\n— routes /maas-api/* and /llm-d-demo/*\n(gateway controller creates this)"]
+        EF["EnvoyFilter  maas-default-gateway-authn-ssl\nwires Envoy → Authorino TLS gRPC cluster\n(maas-controller creates on annotation change)"]
+        EF2["EnvoyFilters  (Kuadrant-managed)\nkuadrant-auth-maas-default-gateway\nkuadrant-ratelimiting-maas-default-gateway"]
     end
 
     subgraph KUADRANT["kuadrant-system"]
         direction TB
         KQ["Kuadrant CR"]
         AUTH["Authorino\nvalidates sk-oai-* API keys\nand OCP Bearer tokens"]
-        LIM["Limitador\ntelemetry: exhaustive\ncounts tokens per user / window"]
+        LIM["Limitador\ncounts tokens per user / window"]
     end
 
     subgraph MAAS_CP["redhat-ods-applications"]
         direction TB
         MAPI["maas-api\nPOST /v1/api-keys\nGET  /v1/subscriptions"]
-        MCTRL["maas-controller\nwatches MaaS CRDs\ncreates Kuadrant policies"]
-        MDB[("maas-db\nPostgreSQL\nstores API keys")]
-        MAAS_HR["HTTPRoute  maas-api-route\n/maas-api/* → maas-api\nURLRewrite strips prefix"]
+        MCTRL["maas-controller\nwatches MaaS CRDs + gateway annotation\ncreates Kuadrant policies"]
+        MDB[("maas-db  PostgreSQL\nstores API keys")]
+        MAAS_HR["HTTPRoute  maas-api-route\n/maas-api/* → maas-api\nURLRewrite strips /maas-api prefix\n(RHOAI operator creates)"]
     end
 
     subgraph MAS["models-as-a-service"]
         direction TB
-        TENANT["Tenant\ndefault-tenant\nmaxExpirationDays: 90"]
-        MREF["MaaSModelRef\nqwen3-8b\nref → LLMInferenceService"]
-        MSUB["MaaSSubscription\nfree-tier-subscription\ntokenRateLimits: 100k / 1h"]
-        MAAP["MaaSAuthPolicy\nfree-tier-auth-policy\ngroups: cluster-admins\n         tier-free-users"]
+        TENANT["Tenant  default-tenant\nmaxExpirationDays: 90"]
+        MSUB["MaaSSubscription  free-tier-subscription\ntokenRateLimits: 100k / 1h"]
+        MAAP["MaaSAuthPolicy  free-tier-auth-policy\ngroups: cluster-admins, tier-free-users"]
     end
 
     subgraph MODEL["llm-d-demo  (model namespace)"]
         direction TB
-        LIS["LLMInferenceService\nqwen3-8b"]
-        MHR["HTTPRoute\nauto-created by odh-model-controller\nparentRefs → maas-default-gateway"]
-        AP["AuthPolicy\ncreated by maas-controller\nenforced by Authorino"]
-        TRLP["TokenRateLimitPolicy\ncreated by maas-controller\nenforced by Limitador"]
-        SVC["Service + vLLM Pods"]
+        LIS["LLMInferenceService  qwen3-8b"]
+        MREF["MaaSModelRef  qwen3-8b\nspec.modelRef → LLMInferenceService\n(you create this)"]
+        MHR["HTTPRoute  qwen3-8b-kserve-route\nparentRefs → maas-default-gateway\nURLRewrite: strips /llm-d-demo/qwen3-8b\nbackendRef → InferencePool\n(odh-model-controller creates)"]
+        IP["InferencePool  qwen3-8b-inference-pool\nGateway API Inference Extension\n(kserve controller creates)"]
+        EPP["EPP Service  qwen3-8b-epp-service\nllm-d intelligent router\n— KV-cache-aware selection\n— picks best vLLM pod  (ext-proc)"]
+        VLLM["vLLM Deployment  qwen3-8b-kserve\n2 replicas × 1 A10G GPU"]
+        AP["AuthPolicy  maas-auth-qwen3-8b\n(maas-controller creates)"]
+        TRLP["TokenRateLimitPolicy  maas-trlp-qwen3-8b\n(maas-controller creates)"]
     end
 
     %% ── Traffic path ──────────────────────────────────────
-    CLIENT -->|HTTPS| OCPR
-    OCPR -->|passthrough TLS| GW
-    GW -->|route: /maas-api/*| MAAS_HR
-    GW -->|route: /llm-d-demo/qwen3-8b/*| MHR
+    CLIENT -->|"HTTPS"| ELB
+    ELB -->|"TCP"| HAPROXY
+    HAPROXY -->|"passthrough TLS\nSNI: maas.apps.&lt;cluster&gt;"| ENVOY
+    ENVOY -->|"gRPC/TLS — auth check"| AUTH
+    ENVOY -->|"gRPC — token count"| LIM
+    ENVOY -->|"route: /maas-api/*"| MAAS_HR
+    ENVOY -->|"route: /llm-d-demo/qwen3-8b/*"| EPP
     MAAS_HR --> MAPI
-    MHR --> SVC
+    EPP -->|"forward to chosen pod"| VLLM
 
-    %% ── Auth & rate-limit enforcement (in-flight) ─────────
-    GW <-->|"gRPC/TLS — auth check"| AUTH
-    GW <-->|"gRPC — token count"| LIM
+    %% ── OCP Route wiring ──────────────────────────────────
+    HAPROXY -.->|"reads"| OCPR
+    OCPR -.->|"backend → ClusterIP"| ENVOY
 
-    %% ── Gateway wiring ────────────────────────────────────
-    GW -.->|spec.gatewayClassName| GC
-    EF -.->|"attached to"| GW
-    TP -.->|spec.targetRef| GW
+    %% ── Gateway API control plane ─────────────────────────
+    GW -.->|"spec.gatewayClassName"| GC
+    GC -.->|"spec.controllerName"| CTRL
+    CTRL -->|"watches & programs"| GW
+    CTRL -->|"creates"| ENVOY
+
+    %% ── EnvoyFilter wiring ────────────────────────────────
+    EF -.->|"configures"| ENVOY
+    EF2 -.->|"configures"| ENVOY
 
     %% ── Kuadrant deploys operands ─────────────────────────
-    KQ -->|deploys| AUTH
-    KQ -->|deploys| LIM
+    KQ -->|"deploys"| AUTH
+    KQ -->|"deploys"| LIM
 
     %% ── maas-controller lifecycle ─────────────────────────
     GW -->|"authorino-tls-bootstrap annotation\ntriggers reconcile"| MCTRL
-    MCTRL -->|creates| EF
-    TENANT -->|watched by| MCTRL
-    MREF -->|watched by| MCTRL
-    MSUB -->|watched by| MCTRL
-    MAAP -->|watched by| MCTRL
-    MCTRL -->|"creates (model ns)"| AP
-    MCTRL -->|"creates (model ns)"| TRLP
+    MCTRL -->|"creates"| EF
+    TENANT -->|"watched by"| MCTRL
+    MREF -->|"watched by"| MCTRL
+    MSUB -->|"watched by"| MCTRL
+    MAAP -->|"watched by"| MCTRL
+    MCTRL -->|"creates"| AP
+    MCTRL -->|"creates"| TRLP
 
     %% ── Policy enforcement binding ────────────────────────
-    AP -.->|enforced by| AUTH
-    TRLP -.->|enforced by| LIM
+    AP -.->|"enforced by"| AUTH
+    TRLP -.->|"enforced by"| LIM
 
     %% ── MaaS CRD references ───────────────────────────────
-    MREF -.->|spec.modelRef| LIS
-    LIS -->|auto-creates| MHR
-    LIS -->|owns| SVC
-    MAPI -->|reads / writes| MDB
+    MREF -.->|"spec.modelRef"| LIS
+    LIS -->|"odh-model-controller creates"| MHR
+    LIS -->|"kserve controller creates"| IP
+    IP -->|"endpointPickerRef"| EPP
+    MAPI -->|"reads / writes"| MDB
 ```
 
 **Solid arrows** (`→`) show creation, traffic flow, or deployment relationships.
 **Dashed arrows** (`-.->`) show Kubernetes spec references and policy bindings.
 
+> **MaaS vs llm-d gateway — key networking difference:** The llm-d gateway gets its own
+> dedicated AWS ELB (LoadBalancer Service). The MaaS gateway uses a **ClusterIP** Service —
+> traffic arrives via the shared OCP router (HAProxy) using a **passthrough TLS Route**, so
+> HAProxy forwards raw TCP directly to the Envoy pod without decrypting it.
+
 | Resource | Namespace | Who creates it |
 |---|---|---|
 | `GatewayClass`, `Gateway`, `OCP Route` | `openshift-ingress` | You (gateway chart) |
+| Envoy Deployment + ClusterIP Service | `openshift-ingress` | Gateway controller (`openshift.io/gateway-controller/v1`) |
 | `EnvoyFilter` `maas-default-gateway-authn-ssl` | `openshift-ingress` | `maas-controller` (on gateway annotation change) |
-| `TelemetryPolicy` | `openshift-ingress` | You (gateway chart) |
-| `Kuadrant`, `Limitador` | `kuadrant-system` | You (connectivity-link chart) |
-| `Authorino` | `kuadrant-system` | Kuadrant operator |
+| `EnvoyFilter` `kuadrant-auth-*`, `kuadrant-ratelimiting-*` | `openshift-ingress` | Kuadrant operator |
+| `Kuadrant` | `kuadrant-system` | You (connectivity-link chart) |
+| `Authorino`, `Limitador` | `kuadrant-system` | Kuadrant operator |
 | `maas-api`, `maas-controller`, `maas-db` | `redhat-ods-applications` | RHOAI operator |
 | `HTTPRoute` maas-api-route | `redhat-ods-applications` | RHOAI operator |
-| `Tenant`, `MaaSModelRef`, `MaaSSubscription`, `MaaSAuthPolicy` | `models-as-a-service` | You |
+| `Tenant`, `MaaSSubscription`, `MaaSAuthPolicy` | `models-as-a-service` | You |
+| `MaaSModelRef` | `llm-d-demo` (model namespace) | You |
 | `AuthPolicy`, `TokenRateLimitPolicy` | `llm-d-demo` | `maas-controller` |
-| `HTTPRoute` (model) | `llm-d-demo` | `odh-model-controller` |
+| `HTTPRoute`, `InferencePool` (model) | `llm-d-demo` | `odh-model-controller` / kserve controller |
 
 ### 9.1 Prerequisites
 
