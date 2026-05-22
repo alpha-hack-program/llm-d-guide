@@ -23,6 +23,7 @@
 12. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
 13. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
 14. [Appendix C — Reference Links](#appendix-c--reference-links)
+15. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
 
 ---
 
@@ -1003,6 +1004,8 @@ oc delete llminferenceservice qwen3-8b -n ${PROJECT}
 ## 9. Model as a Service (MaaS)
 
 > **Technology Preview:** MaaS is a Technology Preview feature in RHOAI 3.4 and is not supported under production SLAs.
+
+> **Self-signed certificates:** If your cluster uses self-signed TLS (no public CA), the MaaS dashboard pages (API keys, authorization policies) will fail unless you inject the CA into the cluster trust bundle. See [Appendix D](#appendix-d--maas-with-self-signed-tls-certificates) for the full analysis and fix steps.
 
 MaaS provides subscription-based governed access to LLMs via `sk-oai-*` API keys, token-based rate limiting, and quota enforcement. It sits on top of KServe (llm-d runtime) and uses Kuadrant (via Red Hat Connectivity Link) for policy enforcement.
 
@@ -2003,3 +2006,86 @@ oc logs -f -l app.kubernetes.io/component=llminferenceservice-router-scheduler -
 | RHOAI 3.4 MaaS Documentation | https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/govern_llm_access_with_models-as-a-service/ |
 | MaaS upstream (opendatahub-io) | https://github.com/opendatahub-io/models-as-a-service |
 | llm-d upstream project | https://github.com/llm-d/llm-d |
+
+---
+
+## Appendix D — MaaS with Self-Signed TLS Certificates
+
+This appendix covers what breaks, what works, and how to fix it when the cluster ingress uses a
+self-signed (or privately-signed) TLS certificate instead of a publicly-trusted CA.
+
+### Component-by-component analysis
+
+| Component | Behavior with self-signed cert | Action needed |
+|---|---|---|
+| `curl` / API SDK clients | Works with `-k` / `verify=False` | None (for testing) |
+| Authorino gRPC/TLS path | **Unaffected** — uses OCP service-CA, independent of ingress cert | None |
+| `maas-api` pod (serving) | Works — it just serves the cert | None |
+| `maas-ui` sidecar in `rhods-dashboard` | **Breaks** — validates TLS, no insecure bypass | Inject CA into cluster trust bundle |
+
+### Why `maas-ui` is the critical failure point
+
+The `maas-ui` sidecar calls `https://maas.<cluster-domain>/maas-api/...` and validates TLS using
+Python's standard `requests` library. It has no `REQUESTS_CA_BUNDLE` override and no
+`SSL_VERIFY=false` env var. The CAs it trusts come from two ConfigMaps that RHOAI mounts into it:
+
+- `odh-trusted-ca-bundle` → `/etc/pki/tls/certs/odh-trusted-ca-bundle.crt`
+- `odh-ca-bundle` → `/etc/pki/tls/certs/odh-ca-bundle.crt`
+
+RHOAI automatically populates these ConfigMaps by merging the cluster system CA bundle with
+`openshift-config/user-ca-bundle` — the cluster-wide mechanism for adding private/corporate CAs.
+
+**If your self-signed CA is in `openshift-config/user-ca-bundle` → it propagates to `maas-ui` → everything works.**
+
+If it is not there → `certificate verify failed` → the API keys and Authorization policies pages
+in the dashboard return 500 errors.
+
+### Why Authorino is unaffected
+
+Authorino TLS uses the OCP service-CA operator — the cert is issued by an internal cluster CA
+(`service.beta.openshift.io/serving-cert-secret-name`), which is always trusted within the cluster.
+The Envoy→Authorino gRPC path is completely separate from the ingress TLS cert.
+
+### Fix: inject the CA into the cluster trust bundle
+
+```bash
+# Add your self-signed / private CA to the cluster trust bundle
+oc create configmap user-ca-bundle -n openshift-config \
+  --from-file=ca-bundle.crt=your-ca.pem \
+  --dry-run=client -o yaml | oc apply -f -
+
+# Wait for RHOAI to propagate it (usually < 60 s)
+oc get cm odh-trusted-ca-bundle -n redhat-ods-applications -w
+
+# Restart the dashboard to pick up the refreshed ConfigMap mount
+oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications
+```
+
+### Using `tls.generate=true` in the MaaS gateway chart
+
+The gateway Helm chart supports `tls.generate=true`, which creates a self-signed cert automatically.
+However the generated CA is **not** added to the cluster trust bundle — you must extract it
+manually and inject it:
+
+```bash
+# Extract the CA from the generated Secret
+oc get secret ingress-certs -n openshift-ingress \
+  -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/maas-ca.pem
+
+# Inject it into the cluster trust bundle
+oc create configmap user-ca-bundle -n openshift-config \
+  --from-file=ca-bundle.crt=/tmp/maas-ca.pem \
+  --dry-run=client -o yaml | oc apply -f -
+
+# Restart dashboard
+oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications
+```
+
+### Summary
+
+| Question | Answer |
+|---|---|
+| Will the API (curl) work? | Yes, with `-k` |
+| Will Authorino/Limitador work? | Yes, unaffected |
+| Will the RHOAI dashboard MaaS pages work? | Only if CA is in `openshift-config/user-ca-bundle` |
+| Is there a "skip TLS" env var in `maas-ui`? | No — CA bundle injection is the only supported path |
