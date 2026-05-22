@@ -170,17 +170,15 @@ RHOAI 3.4 requires several operators installed **before** creating the DataScien
 
 ### 3.0 ArgoCD (Red Hat OpenShift GitOps)
 
-Go to `Ecosystem / Software Catalog`, search for **gitops**, then click **Red Hat OpenShift GitOps**.
+```bash
+helm template openshift-gitops ./gitops/operators/openshift-gitops | oc apply -f -
+```
 
-[![ArgoCD installation screenshots](images/gitops-install-1.png)](images/gitops-install-1.png)
+Wait for the CSV to reach `Succeeded`:
 
-Leave the defaults and click **Install**.
-
-[![ArgoCD installation screenshots](images/gitops-install-2.png)](images/gitops-install-2.png)
-
-Leave the defaults as shown and click **Install**.
-
-[![ArgoCD installation screenshots](images/gitops-install-3.png)](images/gitops-install-3.png)
+```bash
+oc get csv -n openshift-gitops-operator --watch
+```
 
 ### 3.1 Cert-Manager Operator and Let's Encrypt Certificate Issuer
 
@@ -728,6 +726,36 @@ oc get gateway -n openshift-ingress
 # openshift-ai-inference            openshift-ai-inference-class     True         ...
 ```
 
+### How the pieces connect
+
+```mermaid
+flowchart TD
+    CTRL(["openshift.io/gateway-controller/v1\nOCP built-in Gateway API controller"])
+
+    GC["GatewayClass\nname: openshift-ai-inference-class\nspec.controllerName →"]
+
+    GW["Gateway\nname: openshift-ai-inference\nnamespace: openshift-ingress\nlisteners: HTTPS :443"]
+
+    HR["HTTPRoute\nnamespace: llm-d-demo\nspec.parentRefs:\n  name: openshift-ai-inference\n  namespace: openshift-ingress\n(auto-created by odh-model-controller)"]
+
+    LIS["LLMInferenceService\nnamespace: llm-d-demo\nname: qwen3-8b"]
+
+    SVC["Service + vLLM Pods\nnamespace: llm-d-demo"]
+
+    GC -->|"spec.controllerName"| CTRL
+    CTRL -->|"programs & manages"| GW
+    GW -.->|"gatewayClassName"| GC
+    HR -->|"spec.parentRefs"| GW
+    LIS -->|"creates"| HR
+    LIS -->|"owns"| SVC
+    HR -->|"routes traffic to"| SVC
+```
+
+- **GatewayClass** names the controller (`openshift.io/gateway-controller/v1`) that will program the Gateway. Created once per cluster.
+- **Gateway** is the actual L7 entry point, programmed by the OCP controller. Lives in `openshift-ingress`.
+- **HTTPRoute** is created automatically by `odh-model-controller` when a `LLMInferenceService` becomes ready. It binds to the Gateway via `spec.parentRefs` and routes `/<namespace>/<model-name>/*` to the model Service.
+- **LLMInferenceService** is the only resource you manage — everything below it is reconciled automatically.
+
 ## Step 2: Create Namespace
 
 ```bash
@@ -947,6 +975,111 @@ oc delete llminferenceservice qwen3-8b -n ${PROJECT}
 MaaS provides subscription-based governed access to LLMs via `sk-oai-*` API keys, token-based rate limiting, and quota enforcement. It sits on top of KServe (llm-d runtime) and uses Kuadrant (via Red Hat Connectivity Link) for policy enforcement.
 
 Access control is CRD-based: `MaaSSubscription` defines token rate limits per model per group, and `MaaSAuthPolicy` grants groups access to models. Users can belong to multiple subscriptions. All config lives in the `models-as-a-service` namespace and is fully GitOps-compatible.
+
+### Architecture overview
+
+```mermaid
+flowchart TD
+    CLIENT(["API client\nBearer: sk-oai-... or OCP token"])
+
+    subgraph INGRESS["openshift-ingress"]
+        direction TB
+        OCPR["OCP Route\nmaas-default-gateway\nhost: maas.apps.&lt;cluster&gt;\ntls: passthrough"]
+        GC["GatewayClass\nname: openshift-default\ncontrollerName:\n  openshift.io/gateway-controller/v1"]
+        GW["Gateway\nname: maas-default-gateway\nlisteners: HTTPS :443\nallowedRoutes: Selector\nannotation: authorino-tls-bootstrap=true"]
+        EF["EnvoyFilter\nmaas-default-gateway-authn-ssl\nAuthorino TLS gRPC cluster\n(created by maas-controller)"]
+        TP["TelemetryPolicy\nmaas-gateway-telemetry\nlabels: user / tier / model"]
+    end
+
+    subgraph KUADRANT["kuadrant-system"]
+        direction TB
+        KQ["Kuadrant CR"]
+        AUTH["Authorino\nvalidates sk-oai-* API keys\nand OCP Bearer tokens"]
+        LIM["Limitador\ntelemetry: exhaustive\ncounts tokens per user / window"]
+    end
+
+    subgraph MAAS_CP["redhat-ods-applications"]
+        direction TB
+        MAPI["maas-api\nPOST /v1/api-keys\nGET  /v1/subscriptions"]
+        MCTRL["maas-controller\nwatches MaaS CRDs\ncreates Kuadrant policies"]
+        MDB[("maas-db\nPostgreSQL\nstores API keys")]
+        MAAS_HR["HTTPRoute  maas-api-route\n/maas-api/* → maas-api\nURLRewrite strips prefix"]
+    end
+
+    subgraph MAS["models-as-a-service"]
+        direction TB
+        TENANT["Tenant\ndefault-tenant\nmaxExpirationDays: 90"]
+        MREF["MaaSModelRef\nqwen3-8b\nref → LLMInferenceService"]
+        MSUB["MaaSSubscription\nfree-tier-subscription\ntokenRateLimits: 100k / 1h"]
+        MAAP["MaaSAuthPolicy\nfree-tier-auth-policy\ngroups: cluster-admins\n         tier-free-users"]
+    end
+
+    subgraph MODEL["llm-d-demo  (model namespace)"]
+        direction TB
+        LIS["LLMInferenceService\nqwen3-8b"]
+        MHR["HTTPRoute\nauto-created by odh-model-controller\nparentRefs → maas-default-gateway"]
+        AP["AuthPolicy\ncreated by maas-controller\nenforced by Authorino"]
+        TRLP["TokenRateLimitPolicy\ncreated by maas-controller\nenforced by Limitador"]
+        SVC["Service + vLLM Pods"]
+    end
+
+    %% ── Traffic path ──────────────────────────────────────
+    CLIENT -->|HTTPS| OCPR
+    OCPR -->|passthrough TLS| GW
+    GW -->|route: /maas-api/*| MAAS_HR
+    GW -->|route: /llm-d-demo/qwen3-8b/*| MHR
+    MAAS_HR --> MAPI
+    MHR --> SVC
+
+    %% ── Auth & rate-limit enforcement (in-flight) ─────────
+    GW <-->|"gRPC/TLS — auth check"| AUTH
+    GW <-->|"gRPC — token count"| LIM
+
+    %% ── Gateway wiring ────────────────────────────────────
+    GW -.->|spec.gatewayClassName| GC
+    EF -.->|"attached to"| GW
+    TP -.->|spec.targetRef| GW
+
+    %% ── Kuadrant deploys operands ─────────────────────────
+    KQ -->|deploys| AUTH
+    KQ -->|deploys| LIM
+
+    %% ── maas-controller lifecycle ─────────────────────────
+    GW -->|"authorino-tls-bootstrap annotation\ntriggers reconcile"| MCTRL
+    MCTRL -->|creates| EF
+    TENANT -->|watched by| MCTRL
+    MREF -->|watched by| MCTRL
+    MSUB -->|watched by| MCTRL
+    MAAP -->|watched by| MCTRL
+    MCTRL -->|"creates (model ns)"| AP
+    MCTRL -->|"creates (model ns)"| TRLP
+
+    %% ── Policy enforcement binding ────────────────────────
+    AP -.->|enforced by| AUTH
+    TRLP -.->|enforced by| LIM
+
+    %% ── MaaS CRD references ───────────────────────────────
+    MREF -.->|spec.modelRef| LIS
+    LIS -->|auto-creates| MHR
+    LIS -->|owns| SVC
+    MAPI -->|reads / writes| MDB
+```
+
+**Solid arrows** (`→`) show creation, traffic flow, or deployment relationships.
+**Dashed arrows** (`-.->`) show Kubernetes spec references and policy bindings.
+
+| Resource | Namespace | Who creates it |
+|---|---|---|
+| `GatewayClass`, `Gateway`, `OCP Route` | `openshift-ingress` | You (gateway chart) |
+| `EnvoyFilter` `maas-default-gateway-authn-ssl` | `openshift-ingress` | `maas-controller` (on gateway annotation change) |
+| `TelemetryPolicy` | `openshift-ingress` | You (gateway chart) |
+| `Kuadrant`, `Limitador` | `kuadrant-system` | You (connectivity-link chart) |
+| `Authorino` | `kuadrant-system` | Kuadrant operator |
+| `maas-api`, `maas-controller`, `maas-db` | `redhat-ods-applications` | RHOAI operator |
+| `HTTPRoute` maas-api-route | `redhat-ods-applications` | RHOAI operator |
+| `Tenant`, `MaaSModelRef`, `MaaSSubscription`, `MaaSAuthPolicy` | `models-as-a-service` | You |
+| `AuthPolicy`, `TokenRateLimitPolicy` | `llm-d-demo` | `maas-controller` |
+| `HTTPRoute` (model) | `llm-d-demo` | `odh-model-controller` |
 
 ### 9.1 Prerequisites
 
