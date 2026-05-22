@@ -74,6 +74,7 @@ Collect these before starting. The assistant should ask for any that are missing
 
 | Variable | Description | Example |
 |---|---|---|
+| `CLOUD` | Cloud provider for cert-manager chart: `aws` (Route53 DNS-01) or `none` (bare metal / non-AWS). **Must be confirmed with the user before Phase 1 — do not default.** | `aws` |
 | `CLUSTER_DOMAIN` | Cluster DNS base domain: from `oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}'` (cert-manager / Route53 flows in README) | `apps.mycluster.example.com` |
 | `AWS_REGION` / `AWS_DEFAULT_REGION` | AWS region for GPU MachineSets (`AWS_REGION`) and Let's Encrypt Route53 issuer (`AWS_DEFAULT_REGION` in README examples) | `eu-west-1` |
 | `AWS_INSTANCE_TYPE` | GPU instance type | `g5.2xlarge` |
@@ -142,9 +143,18 @@ oc get secret pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfig
 
 **Goal:** Install the GitOps operator and automate TLS certificate lifecycle.
 
+**Before starting Phase 1 — ask the user:**
+> "Is this cluster running on AWS, or on bare metal / a non-AWS cloud?
+> - **AWS** → cert-manager will use Route53 DNS-01 via CCO (`cloud=aws`).
+> - **Bare metal / non-AWS** → no CredentialsRequest is created (`cloud=none`).
+>
+> Which is it?"
+
+Do NOT pass `--set cloud=aws` (or `cloud=none`) without an explicit answer from the user.
+
 **Install order:**
 1. *(Optional)* Red Hat OpenShift GitOps (ArgoCD) — via OperatorHub UI or CLI. Not required if applying manifests directly with `helm template | oc apply`.
-2. cert-manager operator — `helm template gitops/operators/cert-manager-operator --set cloud=aws | oc apply -f -` (AWS) or `cloud=none` (bare metal). ArgoCD `Application` path documented in README section 3.1 as an alternative.
+2. cert-manager operator — `helm template gitops/operators/cert-manager-operator --set cloud=${CLOUD} | oc apply -f -` where `CLOUD` is `aws` or `none` (confirmed with user above). ArgoCD `Application` path documented in README section 3.1 as an alternative.
 3. Let's Encrypt ClusterIssuers + certificates for Ingress and API — `helm template gitops/operators/cert-manager-route53 --set clusterDomain=<apps-domain> --set route53.region=<region> | oc apply -f -`
 
 **Key wait condition:**
