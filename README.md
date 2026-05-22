@@ -741,14 +741,14 @@ flowchart TD
         CTRL(["controller\ncreates one Envoy Deployment\nper Gateway"])
     end
 
-    subgraph OI["openshift-ingress  (created by gateway controller)"]
-        ENVOY["Envoy Deployment\nopenshift-ai-inference-*\nimage: istio-proxyv2-rhel9\n— terminates TLS\n— matches HTTPRoute rules\n— rewrites URL prefix\n— routes to InferencePool"]
-        LB_SVC["Service  type: LoadBalancer\n→ AWS ELB"]
+    subgraph OI["openshift-ingress"]
+        GW["Gateway  openshift-ai-inference\nspec.gatewayClassName →\nlisteners: HTTPS :443\n(you create this via helm chart)"]
+        ENVOY["Envoy Deployment\nopenshift-ai-inference-*\nimage: istio-proxyv2-rhel9\n— terminates TLS\n— matches HTTPRoute rules\n— rewrites URL prefix\n— routes to InferencePool\n(gateway controller creates this)"]
+        LB_SVC["Service  type: LoadBalancer\n→ AWS ELB\n(gateway controller creates this)"]
     end
 
     subgraph LLMD["llm-d-demo  (created by kserve + odh-model-controller)"]
         direction TB
-        GW["Gateway spec ref\nname: openshift-ai-inference\nnamespace: openshift-ingress"]
         HR["HTTPRoute  qwen3-8b-kserve-route\nauto-created by odh-model-controller\nparentRefs → openshift-ai-inference\nURLRewrite: strips /llm-d-demo/qwen3-8b\nbackendRef → InferencePool"]
         IP["InferencePool  qwen3-8b-inference-pool\nGateway API Inference Extension\nendpointPickerRef → EPP Service"]
         EPP["EPP Service  qwen3-8b-epp-service\nEndpoint Picker Pod  (ext-proc sidecar)\nllm-d intelligent router:\n— KV-cache-aware selection\n— prefill / decode disaggregation\n— picks best vLLM pod"]
@@ -764,7 +764,9 @@ flowchart TD
     LIS -->|"odh-model-controller creates"| HR
 
     %% ── Gateway API control plane ────────────────────────────
+    GW -.->|"spec.gatewayClassName"| GC
     GC -.->|"spec.controllerName"| CTRL
+    CTRL -->|"watches & programs"| GW
     CTRL -->|"creates"| ENVOY
     CTRL -->|"creates"| LB_SVC
     LB_SVC -->|"provisions"| ELB
