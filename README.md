@@ -730,31 +730,61 @@ oc get gateway -n openshift-ingress
 
 ```mermaid
 flowchart TD
-    CTRL(["openshift.io/gateway-controller/v1\nOCP built-in Gateway API controller"])
+    CLIENT(["API client\nGET /llm-d-demo/qwen3-8b/v1/chat/completions"])
 
-    GC["GatewayClass\nname: openshift-ai-inference-class\nspec.controllerName →"]
+    subgraph AWS["AWS"]
+        ELB["Elastic Load Balancer\nprovisioned by LoadBalancer Service"]
+    end
 
-    GW["Gateway\nname: openshift-ai-inference\nnamespace: openshift-ingress\nlisteners: HTTPS :443"]
+    subgraph CTRL_PLANE["openshift.io/gateway-controller/v1  —  OCP built-in Gateway API controller"]
+        GC["GatewayClass\nname: openshift-ai-inference-class"]
+        CTRL(["controller\ncreates one Envoy Deployment\nper Gateway"])
+    end
 
-    HR["HTTPRoute\nnamespace: llm-d-demo\nspec.parentRefs:\n  name: openshift-ai-inference\n  namespace: openshift-ingress\n(auto-created by odh-model-controller)"]
+    subgraph OI["openshift-ingress  (created by gateway controller)"]
+        ENVOY["Envoy Deployment\nopenshift-ai-inference-*\nimage: istio-proxyv2-rhel9\n— terminates TLS\n— matches HTTPRoute rules\n— rewrites URL prefix\n— routes to InferencePool"]
+        LB_SVC["Service  type: LoadBalancer\n→ AWS ELB"]
+    end
 
-    LIS["LLMInferenceService\nnamespace: llm-d-demo\nname: qwen3-8b"]
+    subgraph LLMD["llm-d-demo  (created by kserve + odh-model-controller)"]
+        direction TB
+        GW["Gateway spec ref\nname: openshift-ai-inference\nnamespace: openshift-ingress"]
+        HR["HTTPRoute  qwen3-8b-kserve-route\nauto-created by odh-model-controller\nparentRefs → openshift-ai-inference\nURLRewrite: strips /llm-d-demo/qwen3-8b\nbackendRef → InferencePool"]
+        IP["InferencePool  qwen3-8b-inference-pool\nGateway API Inference Extension\nendpointPickerRef → EPP Service"]
+        EPP["EPP Service  qwen3-8b-epp-service\nEndpoint Picker Pod  (ext-proc sidecar)\nllm-d intelligent router:\n— KV-cache-aware selection\n— prefill / decode disaggregation\n— picks best vLLM pod"]
+        VLLM["vLLM Deployment  qwen3-8b-kserve\n2 replicas × 1 A10G GPU\nruns inference, streams tokens"]
+        SCHED["Router-Scheduler Deployment\nqwen3-8b-kserve-router-scheduler\ntokenizer + llm-d scheduler"]
+        LIS["LLMInferenceService  qwen3-8b\n(the only resource you manage)"]
+    end
 
-    SVC["Service + vLLM Pods\nnamespace: llm-d-demo"]
+    %% ── What you apply ──────────────────────────────────────
+    LIS -->|"kserve controller creates"| VLLM
+    LIS -->|"kserve controller creates"| SCHED
+    LIS -->|"kserve controller creates"| IP
+    LIS -->|"odh-model-controller creates"| HR
 
-    GC -->|"spec.controllerName"| CTRL
-    CTRL -->|"programs & manages"| GW
-    GW -.->|"gatewayClassName"| GC
-    HR -->|"spec.parentRefs"| GW
-    LIS -->|"creates"| HR
-    LIS -->|"owns"| SVC
-    HR -->|"routes traffic to"| SVC
+    %% ── Gateway API control plane ────────────────────────────
+    GC -.->|"spec.controllerName"| CTRL
+    CTRL -->|"creates"| ENVOY
+    CTRL -->|"creates"| LB_SVC
+    LB_SVC -->|"provisions"| ELB
+    HR -.->|"spec.parentRefs"| GW
+    IP -->|"endpointPickerRef"| EPP
+
+    %% ── Live request path ────────────────────────────────────
+    CLIENT -->|"HTTPS"| ELB
+    ELB -->|"TCP"| ENVOY
+    ENVOY -->|"ext-proc: pick pod"| EPP
+    EPP -->|"forward to chosen pod"| VLLM
 ```
 
-- **GatewayClass** names the controller (`openshift.io/gateway-controller/v1`) that will program the Gateway. Created once per cluster.
-- **Gateway** is the actual L7 entry point, programmed by the OCP controller. Lives in `openshift-ingress`.
-- **HTTPRoute** is created automatically by `odh-model-controller` when a `LLMInferenceService` becomes ready. It binds to the Gateway via `spec.parentRefs` and routes `/<namespace>/<model-name>/*` to the model Service.
-- **LLMInferenceService** is the only resource you manage — everything below it is reconciled automatically.
+- **GatewayClass** declares which controller manages Gateways with this class name. One per cluster.
+- **Gateway controller** (`openshift.io/gateway-controller/v1`) reacts to the Gateway CR by creating a dedicated **Envoy Deployment** (`istio-proxyv2-rhel9`) and a **LoadBalancer Service** (→ AWS ELB) in `openshift-ingress`. It does **not** touch the existing HAProxy `router-default`.
+- **Envoy pod** is the actual data-plane proxy: it terminates TLS, matches the HTTPRoute path rules, rewrites the URL prefix (strips `/llm-d-demo/qwen3-8b` before forwarding), and calls the EPP via the ext-proc protocol to pick a backend pod.
+- **HTTPRoute** is created automatically by `odh-model-controller`. Its `backendRefs` point to an **`InferencePool`**, not a plain `Service`.
+- **InferencePool** is a Gateway API Inference Extension resource. It tells the Envoy data plane to delegate endpoint selection to the **EPP (Endpoint Picker Pod)** rather than using standard round-robin load balancing.
+- **EPP** is a sidecar in the workload Deployment. It implements llm-d's intelligent routing: KV-cache-aware selection, prefill/decode disaggregation, and load-aware scheduling. Envoy calls it per-request via ext-proc and EPP replies with the address of the chosen vLLM pod.
+- **LLMInferenceService** is the only resource you manage — the kserve controller and `odh-model-controller` reconcile everything else automatically.
 
 ## Step 2: Create Namespace
 
