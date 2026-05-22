@@ -24,6 +24,7 @@
 13. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
 14. [Appendix C — Reference Links](#appendix-c--reference-links)
 15. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
+16. [11. External Model MaaS Demo (Optional)](#11-external-model-maas-demo-optional)
 
 ---
 
@@ -1945,6 +1946,246 @@ oc delete maassubscription freemium-subscription pro-subscription premium-subscr
 oc delete group freemium pro premium 2>/dev/null || true
 oc delete user alice bob charlie 2>/dev/null || true
 oc delete identity --all 2>/dev/null || true   # clears IdP-linked identity objects
+```
+
+---
+
+## 11. External Model MaaS Demo (Optional)
+
+An `ExternalModel` lets you publish any OpenAI-compatible API endpoint — LiteLLM, a remote vLLM, Together.ai, etc. — through the same MaaS gateway, giving it identical API key auth, token rate limiting, and subscription controls as a native llm-d model. No GPU workload is deployed: the `ExternalModel` CR is just a pointer to an existing endpoint with an attached credential.
+
+Assumes Phase 9 (MaaS) is complete. The `premium` group and `alice` user from [Section 10](#10-maas-demo-optional) are reused here; if you skipped that section, the setup steps below create them.
+
+**Demo layout:**
+
+| Tier | Group | User | Model | Limit | Window |
+|---|---|---|---|---|---|
+| premium | `premium` | alice | `qwen3-14b` (external) | 1 000 tokens | 1 h |
+
+### 11.1 Prepare the model namespace
+
+The `ExternalModel` and its credential Secret live in a dedicated namespace. The MaaS gateway must be updated to allow HTTPRoutes from it.
+
+```bash
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+
+# Create namespace
+oc new-project models 2>/dev/null || oc project models
+```
+
+Re-apply the MaaS gateway chart to add `models` to the allowed namespaces. Adjust `gateway.modelNamespaces` to include all namespaces already in use (e.g. `llm-d-demo`) plus the new one:
+
+```bash
+helm template gitops/instance/maas/gateway --name-template maas-gateway \
+  --set clusterDomain="${CLUSTER_DOMAIN}" \
+  --set useOpenShiftRoute=true \
+  --set tls.secretName=ingress-certs \
+  --set limitador.exhaustiveTelemetry=false \
+  --set telemetry.enabled=false \
+  --set "gateway.modelNamespaces={llm-d-demo,models}" | oc apply -f -
+```
+
+Verify the Gateway listener picked up the new namespace:
+
+```bash
+oc get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[0].allowedRoutes}' | jq .
+```
+
+### 11.2 Create the ExternalModel and credentials
+
+Replace `<LITELLM_ENDPOINT>` with the hostname (no `https://`) of your OpenAI-compatible endpoint, and `<LITELLM_API_KEY>` with the API key that endpoint expects.
+
+```bash
+cat <<'EOF' | oc apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm-credentials
+  namespace: models
+type: Opaque
+stringData:
+  api-key: "<LITELLM_API_KEY>"
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: ExternalModel
+metadata:
+  name: qwen3-14b
+  namespace: models
+spec:
+  provider: openai
+  endpoint: <LITELLM_ENDPOINT>/v1
+  targetModel: qwen3-14b
+  credentialRef:
+    name: litellm-credentials
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: qwen3-14b-model
+  namespace: models
+spec:
+  modelRef:
+    kind: ExternalModel
+    name: qwen3-14b
+EOF
+```
+
+Wait for the `MaaSModelRef` to become Ready:
+
+```bash
+oc get maasmodelref qwen3-14b-model -n models -w
+# Expected: Ready: True (the maas-controller creates an HTTPRoute and wires the gateway)
+```
+
+Check the HTTPRoute the maas-controller created:
+
+```bash
+oc get httproute -n models
+# Expected: a route with parentRef maas-default-gateway and path /models/qwen3-14b-model/*
+```
+
+### 11.3 Subscription and auth policy
+
+```bash
+cat <<'EOF' | oc apply -f -
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: external-premium-subscription
+  namespace: models-as-a-service
+spec:
+  owner:
+    groups:
+      - name: premium
+  modelRefs:
+    - name: qwen3-14b-model
+      namespace: models
+      tokenRateLimits:
+        - limit: 1000
+          window: 1h
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSAuthPolicy
+metadata:
+  name: external-premium-auth-policy
+  namespace: models-as-a-service
+spec:
+  subjects:
+    groups:
+      - name: premium
+  modelRefs:
+    - name: qwen3-14b-model
+      namespace: models
+EOF
+```
+
+Verify the `maas-controller` translated the subscription into a Kuadrant policy:
+
+```bash
+oc get tokenratelimitpolicy -n models
+# Expected: maas-trlp-qwen3-14b-model   Accepted=True  Enforced=True
+```
+
+### 11.4 Ensure the `premium` group and `alice` exist
+
+Skip this block if alice is already set up from Section 10.
+
+```bash
+SECRET_NAME=$(oc get oauth cluster \
+  -o jsonpath='{.spec.identityProviders[?(@.type=="HTPasswd")].htpasswd.fileData.name}')
+
+oc get secret "${SECRET_NAME}" -n openshift-config \
+  -o jsonpath='{.data.htpasswd}' | base64 -d > /tmp/htpasswd.current
+
+set +H
+grep -v "^alice:" /tmp/htpasswd.current > /tmp/htpasswd.new 2>/dev/null || true
+./scripts/add-htpasswd-user.sh alice 'Alice1234!' >> /tmp/htpasswd.new
+set -H
+
+oc create secret generic "${SECRET_NAME}" -n openshift-config \
+  --from-file=htpasswd=/tmp/htpasswd.new \
+  --dry-run=client -o yaml | oc apply -f -
+
+oc adm groups new premium 2>/dev/null || true
+oc adm groups add-users premium alice
+```
+
+### 11.5 Test — create an API key and call the model
+
+**Resolve cluster coordinates:**
+
+```bash
+OCP_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+OCP_API="https://api.${OCP_DOMAIN#apps.}:6443"
+MAAS_GW="maas.${OCP_DOMAIN}"
+```
+
+**Log in as alice and create an API key:**
+
+```bash
+export KUBECONFIG=~/.kube/config-ext-alice
+oc login --username=alice --password='Alice1234!' "${OCP_API}"
+ALICE_TOKEN=$(oc whoami -t)
+
+ALICE_KEY=$(curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
+  -H "Authorization: Bearer ${ALICE_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"alice-ext-key","expiresInDays":1}' \
+  | jq -re '.key')
+echo "ALICE_KEY=${ALICE_KEY}"
+```
+
+**Call the external model:**
+
+```bash
+curl -sk "https://${MAAS_GW}/models/qwen3-14b-model/v1/chat/completions" \
+  -H "Authorization: Bearer ${ALICE_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "qwen3-14b",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "max_tokens": 50
+  }' | jq '{status: .choices[0].finish_reason, tokens: .usage.total_tokens, reply: .choices[0].message.content}'
+```
+
+Expected response:
+
+```json
+{
+  "status": "stop",
+  "tokens": 42,
+  "reply": "The capital of France is Paris."
+}
+```
+
+**Verify rate limiting is active** — fire enough calls to approach the 1 000-token/h window:
+
+```bash
+for i in $(seq 1 20); do
+  HTTP=$(curl -sk -o /tmp/ext_resp.json -w "%{http_code}" \
+    "https://${MAAS_GW}/models/qwen3-14b-model/v1/chat/completions" \
+    -H "Authorization: Bearer ${ALICE_KEY}" \
+    -H "Content-Type: application/json" \
+    -d '{"model":"qwen3-14b","messages":[{"role":"user","content":"Say hi in one sentence."}],"max_tokens":30}')
+  TOKENS=$(jq -r '.usage.total_tokens // "—"' /tmp/ext_resp.json 2>/dev/null)
+  echo "  req ${i}: HTTP ${HTTP} — ${TOKENS} tokens"
+  [[ "${HTTP}" == "429" ]] && echo "Rate limit hit." && break
+  sleep 1
+done
+```
+
+### 11.6 Cleanup
+
+```bash
+# Delete MaaS CRs
+oc delete maasauthpolicy external-premium-auth-policy -n models-as-a-service 2>/dev/null || true
+oc delete maassubscription external-premium-subscription -n models-as-a-service 2>/dev/null || true
+oc delete maasmodelref qwen3-14b-model -n models 2>/dev/null || true
+oc delete externalmodel qwen3-14b -n models 2>/dev/null || true
+oc delete secret litellm-credentials -n models 2>/dev/null || true
+
+# Remove the namespace (also removes the HTTPRoute the controller created)
+oc delete project models 2>/dev/null || true
 ```
 
 ---
