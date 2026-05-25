@@ -1512,9 +1512,9 @@ A self-contained walkthrough showing token rate-limit enforcement across three t
 
 | Tier | Group | User | Limit | Window | Effect |
 |---|---|---|---|---|---|
-| freemium | `freemium` | charlie | 300 tokens | 5 min | Exhausted after ~3 short requests |
-| pro | `pro` | bob | 3 000 tokens | 5 min | ~30 requests — not exhausted in demo |
-| premium | `premium` | alice | 30 000 tokens | 5 min | Effectively unlimited |
+| freemium | `freemium-users` | charlie | 300 tokens | 5 min | Exhausted after ~3 short requests |
+| pro | `pro-users` | bob | 3 000 tokens | 5 min | ~30 requests — not exhausted in demo |
+| premium | `premium-users` | alice | 30 000 tokens | 5 min | Effectively unlimited |
 
 5-minute windows make the demo repeatable — limits reset without any manual cleanup.
 
@@ -1550,18 +1550,18 @@ set -H
 
 # Update the secret and restart OAuth (~30 s)
 echo "Update secret: ${SECRET_NAME} in namespace: openshift-config with file: /tmp/htpasswd.current"
+cat /tmp/htpasswd.current
 ```
 
 **Create OCP groups and assign users:**
 
 ```bash
-# Create each group individually — passing multiple names to `new` only creates the first
-oc adm groups new freemium 2>/dev/null || true
-oc adm groups new pro      2>/dev/null || true
-oc adm groups new premium  2>/dev/null || true
-oc adm groups add-users freemium charlie
-oc adm groups add-users pro       bob
-oc adm groups add-users premium   alice
+oc adm groups new freemium-users 2>/dev/null || true
+oc adm groups new pro-users      2>/dev/null || true
+oc adm groups new premium-users  2>/dev/null || true
+oc adm groups add-users freemium-users charlie
+oc adm groups add-users pro-users      bob
+oc adm groups add-users premium-users  alice
 ```
 
 **Create MaaSSubscriptions (one per tier):**
@@ -1576,7 +1576,7 @@ metadata:
 spec:
   owner:
     groups:
-      - name: freemium
+      - name: freemium-users
   modelRefs:
     - name: qwen3-8b
       namespace: llm-d-demo
@@ -1592,7 +1592,7 @@ metadata:
 spec:
   owner:
     groups:
-      - name: pro
+      - name: pro-users
   modelRefs:
     - name: qwen3-8b
       namespace: llm-d-demo
@@ -1608,7 +1608,7 @@ metadata:
 spec:
   owner:
     groups:
-      - name: premium
+      - name: premium-users
   modelRefs:
     - name: qwen3-8b
       namespace: llm-d-demo
@@ -1630,7 +1630,7 @@ metadata:
 spec:
   subjects:
     groups:
-      - name: freemium
+      - name: freemium-users
   modelRefs:
     - name: qwen3-8b
       namespace: llm-d-demo
@@ -1643,7 +1643,7 @@ metadata:
 spec:
   subjects:
     groups:
-      - name: pro
+      - name: pro-users
   modelRefs:
     - name: qwen3-8b
       namespace: llm-d-demo
@@ -1656,7 +1656,7 @@ metadata:
 spec:
   subjects:
     groups:
-      - name: premium
+      - name: premium-users
   modelRefs:
     - name: qwen3-8b
       namespace: llm-d-demo
@@ -1943,49 +1943,47 @@ oc delete maassubscription freemium-subscription pro-subscription premium-subscr
   -n models-as-a-service 2>/dev/null || true
 
 # Remove groups and users
-oc delete group freemium pro premium 2>/dev/null || true
-oc delete user alice bob charlie 2>/dev/null || true
-oc delete identity --all 2>/dev/null || true   # clears IdP-linked identity objects
+oc delete group freemium-users pro-users premium-users 2>/dev/null || true
+# oc delete user alice bob charlie 2>/dev/null || true
+# oc delete identity --all 2>/dev/null || true   # clears IdP-linked identity objects
 ```
 
 ---
 
 ## 11. External Model MaaS Demo (Optional)
 
-An `ExternalModel` lets you publish any OpenAI-compatible API endpoint — LiteLLM, a remote vLLM, Together.ai, etc. — through the same MaaS gateway, giving it identical API key auth, token rate limiting, and subscription controls as a native llm-d model. No GPU workload is deployed: the `ExternalModel` CR is just a pointer to an existing endpoint with an attached credential.
+An `ExternalModel` lets you publish any OpenAI-compatible API endpoint, through the same MaaS gateway, giving it identical API key auth, token rate limiting, and subscription controls as a native llm-d model. No GPU workload is deployed: the `ExternalModel` CR is just a pointer to an existing endpoint with an attached credential.
 
-Assumes Phase 9 (MaaS) is complete. The `premium` group and `alice` user from [Section 10](#10-maas-demo-optional) are reused here; if you skipped that section, the setup steps below create them.
+Assumes Phase 9 (MaaS) is complete. The `premium-users` group and `alice` user from [Section 10](#10-maas-demo-optional) are reused here; if you skipped that section, the setup steps below create them.
 
 **Demo layout:**
 
 | Tier | Group | User | Model | Limit | Window |
 |---|---|---|---|---|---|
-| premium | `premium` | alice | `qwen3-14b` (external) | 1 000 tokens | 1 h |
+| premium | `premium-users` | alice | `qwen3-14b` (external) | 1 000 tokens | 1 h |
 
 ### 11.1 Prepare the model namespace
 
-The `ExternalModel` and its credential Secret live in a dedicated namespace. The MaaS gateway must be updated to allow HTTPRoutes from it.
+The `ExternalModel` and its credential Secret live in the same namespace used for llm-d inference services. This demo uses `llm-d-demo`, which is already in the MaaS gateway's allowed namespace list from Phase 9.
 
 ```bash
 CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-
-# Create namespace
-oc new-project models 2>/dev/null || oc project models
+MODEL_NAMESPACE=llm-d-demo
 ```
 
-Re-apply the MaaS gateway chart to add `models` to the allowed namespaces. Adjust `gateway.modelNamespaces` to include all namespaces already in use (e.g. `llm-d-demo`) plus the new one:
+> **Using a different namespace?** If you want to isolate the ExternalModel in its own namespace, create it first and then re-apply the gateway chart with the new namespace added to `gateway.modelNamespaces`:
+>
+> ```bash
+> helm template gitops/instance/maas/gateway --name-template maas-gateway \
+>   --set clusterDomain="${CLUSTER_DOMAIN}" \
+>   --set useOpenShiftRoute=true \
+>   --set tls.secretName=ingress-certs \
+>   --set limitador.exhaustiveTelemetry=false \
+>   --set telemetry.enabled=false \
+>   --set "gateway.modelNamespaces={llm-d-demo,<YOUR_NAMESPACE>}" | oc apply -f -
+> ```
 
-```bash
-helm template gitops/instance/maas/gateway --name-template maas-gateway \
-  --set clusterDomain="${CLUSTER_DOMAIN}" \
-  --set useOpenShiftRoute=true \
-  --set tls.secretName=ingress-certs \
-  --set limitador.exhaustiveTelemetry=false \
-  --set telemetry.enabled=false \
-  --set "gateway.modelNamespaces={llm-d-demo,models}" | oc apply -f -
-```
-
-Verify the Gateway listener picked up the new namespace:
+Verify the Gateway listener has `llm-d-demo` (or your namespace) in its allowed routes:
 
 ```bash
 oc get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[0].allowedRoutes}' | jq .
@@ -1995,13 +1993,17 @@ oc get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.lis
 
 Replace `<LITELLM_ENDPOINT>` with the hostname (no `https://`) of your OpenAI-compatible endpoint, and `<LITELLM_API_KEY>` with the API key that endpoint expects.
 
+> **Critical:** The Secret **must** carry the label `inference.networking.k8s.io/bbr-managed: "true"`. The `payload-processing` ext_proc service uses this label as a predicate — secrets without it are silently ignored and the credential store is never populated, causing every call to fail with `"provider 'openai' credentials not found"`.
+
 ```bash
-cat <<'EOF' | oc apply -f -
+cat <<EOF | oc apply -f -
 apiVersion: v1
 kind: Secret
 metadata:
   name: litellm-credentials
-  namespace: models
+  namespace: ${MODEL_NAMESPACE}
+  labels:
+    inference.networking.k8s.io/bbr-managed: "true"
 type: Opaque
 stringData:
   api-key: "<LITELLM_API_KEY>"
@@ -2010,10 +2012,10 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: ExternalModel
 metadata:
   name: qwen3-14b
-  namespace: models
+  namespace: ${MODEL_NAMESPACE}
 spec:
   provider: openai
-  endpoint: <LITELLM_ENDPOINT>/v1
+  endpoint: <LITELLM_ENDPOINT>
   targetModel: qwen3-14b
   credentialRef:
     name: litellm-credentials
@@ -2022,7 +2024,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
   name: qwen3-14b-model
-  namespace: models
+  namespace: ${MODEL_NAMESPACE}
 spec:
   modelRef:
     kind: ExternalModel
@@ -2033,21 +2035,21 @@ EOF
 Wait for the `MaaSModelRef` to become Ready:
 
 ```bash
-oc get maasmodelref qwen3-14b-model -n models -w
+oc get maasmodelref qwen3-14b-model -n ${MODEL_NAMESPACE} -w
 # Expected: Ready: True (the maas-controller creates an HTTPRoute and wires the gateway)
 ```
 
 Check the HTTPRoute the maas-controller created:
 
 ```bash
-oc get httproute -n models
-# Expected: a route with parentRef maas-default-gateway and path /models/qwen3-14b-model/*
+oc get httproute -n ${MODEL_NAMESPACE}
+# Expected: a route with parentRef maas-default-gateway and path /${MODEL_NAMESPACE}/qwen3-14b/*
 ```
 
 ### 11.3 Subscription and auth policy
 
 ```bash
-cat <<'EOF' | oc apply -f -
+cat <<EOF | oc apply -f -
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSSubscription
 metadata:
@@ -2056,10 +2058,10 @@ metadata:
 spec:
   owner:
     groups:
-      - name: premium
+      - name: premium-users
   modelRefs:
     - name: qwen3-14b-model
-      namespace: models
+      namespace: ${MODEL_NAMESPACE}
       tokenRateLimits:
         - limit: 1000
           window: 1h
@@ -2072,21 +2074,21 @@ metadata:
 spec:
   subjects:
     groups:
-      - name: premium
+      - name: premium-users
   modelRefs:
     - name: qwen3-14b-model
-      namespace: models
+      namespace: ${MODEL_NAMESPACE}
 EOF
 ```
 
 Verify the `maas-controller` translated the subscription into a Kuadrant policy:
 
 ```bash
-oc get tokenratelimitpolicy -n models
+oc get tokenratelimitpolicy -n ${MODEL_NAMESPACE}
 # Expected: maas-trlp-qwen3-14b-model   Accepted=True  Enforced=True
 ```
 
-### 11.4 Ensure the `premium` group and `alice` exist
+### 11.4 Ensure the `premium-users` group and `alice` exist
 
 Skip this block if alice is already set up from Section 10.
 
@@ -2097,17 +2099,15 @@ SECRET_NAME=$(oc get oauth cluster \
 oc get secret "${SECRET_NAME}" -n openshift-config \
   -o jsonpath='{.data.htpasswd}' | base64 -d > /tmp/htpasswd.current
 
-set +H
 grep -v "^alice:" /tmp/htpasswd.current > /tmp/htpasswd.new 2>/dev/null || true
-./scripts/add-htpasswd-user.sh alice 'Alice1234!' >> /tmp/htpasswd.new
-set -H
+htpasswd -Bnb alice 'Alice1234!' >> /tmp/htpasswd.new
 
 oc create secret generic "${SECRET_NAME}" -n openshift-config \
   --from-file=htpasswd=/tmp/htpasswd.new \
   --dry-run=client -o yaml | oc apply -f -
 
-oc adm groups new premium 2>/dev/null || true
-oc adm groups add-users premium alice
+oc adm groups new premium-users 2>/dev/null || true
+oc adm groups add-users premium-users alice
 ```
 
 ### 11.5 Test — create an API key and call the model
@@ -2130,15 +2130,17 @@ ALICE_TOKEN=$(oc whoami -t)
 ALICE_KEY=$(curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
   -H "Authorization: Bearer ${ALICE_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"name":"alice-ext-key","expiresInDays":1}' \
+  -d '{"name":"alice-ext-key","subscription":"external-premium-subscription","expiresInDays":90}' \
   | jq -re '.key')
 echo "ALICE_KEY=${ALICE_KEY}"
 ```
 
 **Call the external model:**
 
+The MaaS gateway path for an ExternalModel is `/{namespace}/{ExternalModel-name}/v1/...` (not the MaaSModelRef name):
+
 ```bash
-curl -sk "https://${MAAS_GW}/models/qwen3-14b-model/v1/chat/completions" \
+curl -sk "https://${MAAS_GW}/${MODEL_NAMESPACE}/qwen3-14b/v1/chat/completions" \
   -H "Authorization: Bearer ${ALICE_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
@@ -2163,7 +2165,7 @@ Expected response:
 ```bash
 for i in $(seq 1 20); do
   HTTP=$(curl -sk -o /tmp/ext_resp.json -w "%{http_code}" \
-    "https://${MAAS_GW}/models/qwen3-14b-model/v1/chat/completions" \
+    "https://${MAAS_GW}/${MODEL_NAMESPACE}/qwen3-14b/v1/chat/completions" \
     -H "Authorization: Bearer ${ALICE_KEY}" \
     -H "Content-Type: application/json" \
     -d '{"model":"qwen3-14b","messages":[{"role":"user","content":"Say hi in one sentence."}],"max_tokens":30}')
@@ -2180,12 +2182,11 @@ done
 # Delete MaaS CRs
 oc delete maasauthpolicy external-premium-auth-policy -n models-as-a-service 2>/dev/null || true
 oc delete maassubscription external-premium-subscription -n models-as-a-service 2>/dev/null || true
-oc delete maasmodelref qwen3-14b-model -n models 2>/dev/null || true
-oc delete externalmodel qwen3-14b -n models 2>/dev/null || true
-oc delete secret litellm-credentials -n models 2>/dev/null || true
-
-# Remove the namespace (also removes the HTTPRoute the controller created)
-oc delete project models 2>/dev/null || true
+oc delete maasmodelref qwen3-14b-model -n ${MODEL_NAMESPACE} 2>/dev/null || true
+oc delete externalmodel qwen3-14b -n ${MODEL_NAMESPACE} 2>/dev/null || true
+oc delete secret litellm-credentials -n ${MODEL_NAMESPACE} 2>/dev/null || true
+# Also removes the HTTPRoute created by the maas-controller:
+oc delete httproute qwen3-14b -n ${MODEL_NAMESPACE} 2>/dev/null || true
 ```
 
 ---

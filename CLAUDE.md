@@ -276,6 +276,31 @@ specifically need distributed workload scheduling — it causes namespace label 
 
 ---
 
+## ExternalModel credential injection — required label
+
+The `payload-processing` ext_proc service (pod in `openshift-ingress`) has two controllers: one for
+`ExternalModel` CRs (populates routing/model-store) and one for `Secret` CRs (populates
+credential-store for the `apikey-injection` plugin).
+
+The secret controller uses `inference.networking.k8s.io/bbr-managed: "true"` as a predicate.
+**Secrets without this label are silently ignored.** The credential store is never populated, and
+every request fails with `"provider 'openai' credentials not found"`.
+
+**Required:** Always add this label to the credential Secret referenced by `credentialRef.name`:
+
+```yaml
+metadata:
+  labels:
+    inference.networking.k8s.io/bbr-managed: "true"
+```
+
+**Path format:** The MaaS HTTPRoute path for an ExternalModel is `/{namespace}/{ExternalModel.metadata.name}/*`
+(not the MaaSModelRef name). Example: `https://maas.<domain>/llm-d-demo/qwen3-14b/v1/chat/completions`.
+
+**Binary:** The ext_proc binary is `/bbr` inside the container (`github.com/opendatahub-io/ai-gateway-payload-processing`).
+
+---
+
 ## Connectivity Link (RHCL) install location
 
 The RHCL operator subscription is in `openshift-operators` (all-namespaces mode), not in a
@@ -318,8 +343,11 @@ oc get authpolicy,tokenratelimitpolicy -n llm-d-demo                    # Kuadra
 oc get authorino authorino -n kuadrant-system -o jsonpath='{.spec.listener.tls.enabled}'
 oc get secret authorino-server-cert -n kuadrant-system
 
-# All inference services
+# All inference services and external models
 oc get llminferenceservice -A
+oc get externalmodel -A
+# Check ExternalModel credential secret has required label
+oc get secrets -A -l inference.networking.k8s.io/bbr-managed=true
 
 # Operator health
 oc get csv -A | grep -v Succeeded
