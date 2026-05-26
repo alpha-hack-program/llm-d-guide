@@ -1,3 +1,4 @@
+.DS_Store
 llm-d-playbook
 .compare-inference
 *.old
@@ -6,3 +7,5 @@ llm-d-playbook
 old
 *.tmp.yaml
 .claude/worktrees/
+*.scratch/
+resume.claude.*

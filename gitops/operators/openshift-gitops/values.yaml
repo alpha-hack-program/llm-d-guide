@@ -1,0 +1,13 @@
+subscription:
+  name: openshift-gitops-operator
+  channel: latest
+  installPlanApproval: Automatic
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+
+namespace:
+  name: openshift-gitops-operator
+  displayName: Red Hat OpenShift GitOps
+
+operatorGroup:
+  name: openshift-gitops-operator

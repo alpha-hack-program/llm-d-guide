@@ -1,0 +1,10 @@
+apiVersion: v2
+name: openshift-gitops-operator
+description: Red Hat OpenShift GitOps (ArgoCD) operator — OLM Namespace, OperatorGroup, and Subscription
+type: application
+version: 0.1.0
+appVersion: "1.15"
+keywords:
+  - openshift
+  - gitops
+  - argocd
