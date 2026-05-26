@@ -186,15 +186,32 @@ oc get csv -n openshift-gitops-operator --watch
 
 > **AWS credential flow (IRSA):** On AWS, the cert-manager chart (`cloud=aws`) creates a `CredentialsRequest` in `openshift-cloud-credential-operator`. The OpenShift Cloud Credential Operator (CCO) reads this request and automatically provisions a scoped IAM credential into an `aws-creds` Secret in the `cert-manager` namespace. The Secret contains `aws_access_key_id` and `aws_secret_access_key` entries tied to a policy that allows only the Route53 actions needed for DNS-01 challenge solving (`route53:GetChange`, `ChangeResourceRecordSets`, `ListResourceRecordSets`, `ListHostedZonesByName`). No manual AWS credential input is required — CCO handles the full lifecycle. Verify the secret was provisioned: `oc get secret aws-creds -n cert-manager`.
 
-#### RBAC Permissions for cert-manager and supporting components
+#### Installing the operator
 
-Grant cert-manager the permissions it needs for Certificates, CertificateRequests, Orders, Challenges, ClusterIssuers, Issuers, and optional monitoring integration:
+The chart deploys the `cert-manager-operator` and `cert-manager` namespaces, the OLM Subscription, the `CertManager` cluster configuration, monitoring RBAC and a `ServiceMonitor`, and (on AWS) a `CredentialsRequest` for Route53 access.
 
-`CLOUD` can be **none** or **aws**, change it to **aws** if running on **AWS**.
+Set `CLOUD` to **aws** when running on AWS, or **none** for bare metal / non-AWS:
 
 ```bash
 CLOUD=aws   # or "none" for bare metal / non-AWS
-helm template gitops/operators/cert-manager-operator --set cloud=${CLOUD} --name-template cert-manager | oc apply -f -
+```
+
+**Option A — CLI:**
+
+```bash
+for i in $(seq 1 60); do
+  if helm template gitops/operators/cert-manager-operator --set cloud=${CLOUD} --name-template cert-manager | oc apply -f -; then
+    break
+  fi
+  [[ $i -eq 60 ]] && { echo "Gave up after 60 attempts"; exit 1; }
+  sleep 5
+done
+
+# Wait for CSV
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
+   -n cert-manager-operator \
+   -l operators.coreos.com/openshift-cert-manager-operator.cert-manager-operator= \
+   --timeout=300s
 ```
 
 > **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reaches `Succeeded`. This is expected. Wait for the CSV, then run the same command a second time — it applies cleanly:
@@ -208,7 +225,9 @@ helm template gitops/operators/cert-manager-operator --set cloud=${CLOUD} --name
 > helm template gitops/operators/cert-manager-operator --set cloud=${CLOUD} --name-template cert-manager | oc apply -f -
 > ```
 
-If you want to use ArgoCD:
+**Option B — ArgoCD:**
+
+ArgoCD needs permission to manage `CredentialsRequest`, `ServiceMonitor`, and cert-manager CRDs before syncing. Apply this ClusterRole and ClusterRoleBinding first:
 
 ```bash
 oc apply -f - <<EOF
@@ -274,7 +293,7 @@ subjects:
 EOF
 ```
 
-#### Installing the operator with ArgoCD
+Then create the ArgoCD Application:
 
 ```bash
 cat <<EOF | oc apply -f -
@@ -305,6 +324,8 @@ EOF
 
 #### Installing Let's Encrypt Cluster Issuers and certificates for OpenShift Ingress and API Server
 
+> **Note:** Only if CLOUD==aws
+
 ```bash
 # 0) Check if logged in with oc
 if ! oc whoami &>/dev/null; then
@@ -312,7 +333,7 @@ if ! oc whoami &>/dev/null; then
   exit 1
 fi
 
-# 1) Wait for the operator to be ready ==> TODO REVIEW
+# 1) Wait for the operator to be ready
 echo -n "Waiting for cert-manager pods to be ready..."
 while [[ $(oc get pods -l app.kubernetes.io/instance=cert-manager -n cert-manager \
   -o 'jsonpath={..status.conditions[?(@.type=="Ready")].status}') != "True True True" ]]; do
@@ -416,6 +437,9 @@ oc wait --for=condition=Established crd/nodefeaturediscoveries.nfd.openshift.io 
 
 # Apply NVIDIA instance (ClusterPolicy CR)
 oc apply -k gitops/instance/nvidia
+
+# Wait for the ClusterPolicy to reach ready state (all GPU daemonsets deployed)
+oc wait --for=jsonpath='{.status.state}'=ready clusterpolicy/gpu-cluster-policy --timeout=600s
 ```
 
 See: [NVIDIA GPU Operator on Red Hat OpenShift Container Platform](https://docs.nvidia.com/datacenter/cloud-native/openshift/latest/index.html)
