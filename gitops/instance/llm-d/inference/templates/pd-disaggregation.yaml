@@ -83,7 +83,12 @@ spec:
                   plugins:
                   - pluginRef: decode-filter
                   - pluginRef: random-picker
-    gateway: {}
+    gateway:
+      {{- if and .Values.maas.enabled .Values.maas.gateway.name }}
+      refs:
+        - name: {{ .Values.maas.gateway.name }}
+          namespace: {{ .Values.maas.gateway.namespace }}
+      {{- end }}
     route: {}
   template:
     tolerations:
@@ -229,4 +234,16 @@ spec:
             timeoutSeconds: {{ .Values.prefill.livenessProbe.timeoutSeconds }}
             failureThreshold: {{ .Values.prefill.livenessProbe.failureThreshold }}
           {{- end }}
+{{- end }}
+
+{{- if and (eq .Values.deploymentType "pd-disaggregation") .Values.maas.enabled }}
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: {{ .Values.serviceName }}
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: {{ .Values.serviceName }}
 {{- end }}

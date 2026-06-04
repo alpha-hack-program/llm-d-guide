@@ -10,21 +10,20 @@
 ## Table of Contents
 
 1. [Overview](#1-overview)
-2. [Using This Guide with Claude Code or OpenCode](#using-this-guide-with-claude-code-or-opencode)
-3. [Global Prerequisites](#2-global-prerequisites)
-4. [Prerequisite Operators](#3-prerequisite-operators)
-5. [Installing the Red Hat OpenShift AI Operator](#4-installing-the-red-hat-openshift-ai-operator)
-6. [Configuring the DataScienceCluster](#5-configuring-the-datasciencecluster)
-7. [TLS Certificate Management](#6-tls-certificate-management)
-8. [OpenTelemetry Observability for RHOAI](#7-opentelemetry-observability-for-rhoai)
-9. [Distributed Inference with llm-d](#8-distributed-inference-with-llm-d)
-10. [Model as a Service (MaaS)](#9-model-as-a-service-maas)
-11. [Validation and Testing](#10-validation-and-testing)
-12. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
-13. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
-14. [Appendix C — Reference Links](#appendix-c--reference-links)
-15. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
-16. [11. External Model MaaS Demo (Optional)](#11-external-model-maas-demo-optional)
+2. [Global Prerequisites](#2-global-prerequisites)
+3. [Prerequisite Operators](#3-prerequisite-operators)
+4. [Installing the Red Hat OpenShift AI Operator](#4-installing-the-red-hat-openshift-ai-operator)
+5. [Configuring the DataScienceCluster](#5-configuring-the-datasciencecluster)
+6. [TLS Certificate Management](#6-tls-certificate-management)
+7. [OpenTelemetry Observability for RHOAI](#7-opentelemetry-observability-for-rhoai)
+8. [Distributed Inference with llm-d](#8-distributed-inference-with-llm-d)
+9. [Model as a Service (MaaS)](#9-model-as-a-service-maas)
+10. [Validation and Testing](#10-validation-and-testing)
+11. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
+12. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
+13. [Appendix C — Reference Links](#appendix-c--reference-links)
+14. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
+15. [11. External Model MaaS Demo (Optional)](#11-external-model-maas-demo-optional)
 
 ---
 
@@ -459,6 +458,46 @@ export AWS_REGION="${AWS_REGION:=eu-west-1}"
 export AMI_ID=$(oc get machineset -n openshift-machine-api \
   -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}')
 export AWS_INSTANCE_TYPE="${AWS_INSTANCE_TYPE:=g5.2xlarge}"
+export AWS_INSTANCES_PER_AZ=${AWS_INSTANCES_PER_AZ:=1}
+
+echo "INFRA_ID=${INFRA_ID}, AWS_REGION=${AWS_REGION}, AMI_ID=${AMI_ID}, AWS_INSTANCE_TYPE=${AWS_INSTANCE_TYPE}"
+
+# All 3 AZs (production). Change to "for AZ in a" for a single-AZ test setup.
+for AZ in a b c; do
+  helm template gpu-worker ./gitops/instance/machine-sets/gpu-worker \
+    --set infrastructureId="${INFRA_ID}" \
+    --set region=${AWS_REGION} \
+    --set instanceType=${AWS_INSTANCE_TYPE} \
+    --set amiId="${AMI_ID}" \
+    --set devicePluginConfig="" \
+    --set az=${AZ} | oc apply -f -
+done
+```
+
+#### Adding L40S GPU nodes in AWS with MachineSets
+
+> **Optional — larger GPU tier.** The NVIDIA L40S (48 GB VRAM) is suited for larger models (e.g. 70B+ parameters) that exceed the 24 GB limit of the A10G. It is available on the `g6e` instance family. Use this section instead of (or in addition to) the A10G section above.
+>
+> - **All 3 AZs** (`a b c`) — recommended for production. Creates 3 MachineSets, one per AZ.
+> - **Single AZ** — sufficient for a single-model test deployment. Replace `for AZ in a b c` with `for AZ in a`.
+>
+> The `AMI_ID` must be the same RHCOS AMI used by your existing worker nodes. Retrieve it from a running MachineSet: `oc get machineset -n openshift-machine-api <name> -o jsonpath='{.spec.template.spec.providerSpec.value.ami.id}'`
+
+| Instance type | GPUs | VRAM | vCPUs | RAM |
+|---|---|---|---|---|
+| `g6e.2xlarge` | 1 × L40S | 48 GB | 8 | 32 GB |
+| `g6e.4xlarge` | 1 × L40S | 48 GB | 16 | 64 GB |
+| `g6e.8xlarge` | 1 × L40S | 48 GB | 32 | 128 GB |
+| `g6e.12xlarge` | 4 × L40S | 192 GB | 48 | 192 GB |
+| `g6e.48xlarge` | 8 × L40S | 384 GB | 192 | 768 GB |
+
+```bash
+export INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
+export AWS_REGION="${AWS_REGION:=eu-west-1}"
+# Get the RHCOS AMI from an existing worker MachineSet:
+export AMI_ID=$(oc get machineset -n openshift-machine-api \
+  -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}')
+export AWS_INSTANCE_TYPE="${AWS_INSTANCE_TYPE:=g6e.2xlarge}"
 export AWS_INSTANCES_PER_AZ=${AWS_INSTANCES_PER_AZ:=1}
 
 echo "INFRA_ID=${INFRA_ID}, AWS_REGION=${AWS_REGION}, AMI_ID=${AMI_ID}, AWS_INSTANCE_TYPE=${AWS_INSTANCE_TYPE}"
@@ -1079,14 +1118,14 @@ flowchart TD
     subgraph MAS["models-as-a-service"]
         direction TB
         TENANT["Tenant  default-tenant\nmaxExpirationDays: 90"]
-        MSUB["MaaSSubscription  free-tier-subscription\ntokenRateLimits: 100k / 1h"]
-        MAAP["MaaSAuthPolicy  free-tier-auth-policy\ngroups: cluster-admins, tier-free-users"]
+        MSUB["MaaSSubscription  admin-subscription\ntokenRateLimits: 100k / 1h"]
+        MAAP["MaaSAuthPolicy  admin-auth-policy\ngroups: cluster-admins"]
     end
 
     subgraph MODEL["llm-d-demo  (model namespace)"]
         direction TB
         LIS["LLMInferenceService  qwen3-8b"]
-        MREF["MaaSModelRef  qwen3-8b\nspec.modelRef → LLMInferenceService\n(you create this)"]
+        MREF["MaaSModelRef  qwen3-8b\nspec.modelRef → LLMInferenceService\n(chart creates when maas.enabled=true)"]
         MHR["HTTPRoute  qwen3-8b-kserve-route\nparentRefs → maas-default-gateway\nURLRewrite: strips /llm-d-demo/qwen3-8b\nbackendRef → InferencePool\n(odh-model-controller creates)"]
         IP["InferencePool  qwen3-8b-inference-pool\nGateway API Inference Extension\n(kserve controller creates)"]
         EPP["EPP Service  qwen3-8b-epp-service\nllm-d intelligent router\n— KV-cache-aware selection\n— picks best vLLM pod  (ext-proc)"]
@@ -1165,7 +1204,7 @@ flowchart TD
 | `maas-api`, `maas-controller`, `maas-db` | `redhat-ods-applications` | RHOAI operator |
 | `HTTPRoute` maas-api-route | `redhat-ods-applications` | RHOAI operator |
 | `Tenant`, `MaaSSubscription`, `MaaSAuthPolicy` | `models-as-a-service` | You |
-| `MaaSModelRef` | `llm-d-demo` (model namespace) | You |
+| `MaaSModelRef` | `llm-d-demo` (model namespace) | Inference chart (`maas.enabled=true`) or dashboard toggle |
 | `AuthPolicy`, `TokenRateLimitPolicy` | `llm-d-demo` | `maas-controller` |
 | `HTTPRoute`, `InferencePool` (model) | `llm-d-demo` | `odh-model-controller` / kserve controller |
 
@@ -1203,12 +1242,14 @@ helm template gitops/instance/maas/gateway \
   --name-template maas-gateway \
   --set clusterDomain="${CLUSTER_DOMAIN}" \
   --set useOpenShiftRoute=true \
-  --set tls.secretName=ingress-certs \
-  --set "gateway.modelNamespaces={<your-model-namespace>}" | oc apply -f -
+  --set tls.secretName=router-certs-default \
+  --set "gateway.modelNamespaces={llm-d-demo,maas-demo}" | oc apply -f -
 oc get gateway maas-default-gateway -n openshift-ingress
 ```
 
 > **Important:** Every namespace that contains MaaS-published `LLMInferenceService` resources must be listed in `gateway.modelNamespaces`. If a namespace is missing, the HTTPRoute will be rejected with `NotAllowedByListeners` and the `LLMInferenceService` will show `HTTPRoutesReady: False`.
+
+> **Note — use `router-certs-default`, not `ingress-certs`:** The gateway chart annotates the Gateway Service with `service.beta.openshift.io/serving-cert-secret-name=<tls.secretName>`, which causes the service-ca-operator to create (or overwrite) that secret with a certificate valid only for the internal Service DNS name (`maas-default-gateway-openshift-default.openshift-ingress.svc`). If you pass `tls.secretName=ingress-certs`, the service-ca-operator silently replaces whatever was there with this internal-only cert. The Envoy pod then presents it to all clients — including the Gen AI Studio backend, which connects to `https://maas.<cluster-domain>/maas-api/...` and receives a certificate that does not cover the public hostname, producing `x509: certificate is valid for ...openshift-ingress.svc, not maas.<cluster-domain>`. The fix is to pass `tls.secretName=router-certs-default`, which already exists in `openshift-ingress` and contains the wildcard cert `*.apps.<cluster-domain>` signed by the OCP ingress operator CA — a CA that is already present in every RHOAI component's trust bundle.
 
 **Step 3 — MaaS Database** (PostgreSQL + `maas-db-config` secret):
 
@@ -1358,13 +1399,13 @@ cat <<'EOF' | oc apply -f -
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSSubscription
 metadata:
-  name: free-tier-subscription
+  name: admin-subscription
   namespace: models-as-a-service
 spec:
+  priority: 0
   owner:
     groups:
       - name: cluster-admins
-      - name: tier-free-users
   modelRefs:
     - name: <model-name>
       namespace: <model-namespace>
@@ -1378,13 +1419,12 @@ cat <<'EOF' | oc apply -f -
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSAuthPolicy
 metadata:
-  name: free-tier-auth-policy
+  name: admin-auth-policy
   namespace: models-as-a-service
 spec:
   subjects:
     groups:
       - name: cluster-admins
-      - name: tier-free-users
   modelRefs:
     - name: <model-name>
       namespace: <model-namespace>
@@ -1428,7 +1468,10 @@ curl -sk "https://${MAAS_GW}/llm-d-demo/<model-name>/v1/chat/completions" \
 
 In the RHOAI dashboard, deploy a model using the **Distributed inference with llm-d** runtime and select **Publish as MaaS endpoint** in Advanced settings. Only the llm-d runtime supports MaaS integration.
 
-For models deployed via Helm (outside the dashboard), create the `MaaSModelRef`, `MaaSSubscription`, and `MaaSAuthPolicy` CRs manually as shown in Step 6 above.
+For models deployed via Helm (outside the dashboard), set `maas.enabled=true` in the values file —
+the inference chart (`gitops/instance/llm-d/inference`) creates the `MaaSModelRef` automatically
+alongside the `LLMInferenceService`. Create `MaaSSubscription` and `MaaSAuthPolicy` CRs manually
+as shown in Step 6 above.
 
 ### 9.4 Token Rate Limiting
 
@@ -1440,30 +1483,24 @@ Token limits are set per model per group in `MaaSSubscription.spec.modelRefs[].t
 
 | Model | Groups | Limit |
 |---|---|---|
-| `qwen3-8b` | `cluster-admins`, `tier-free-users` | 100,000 tokens / 1h |
-| `opt-125m` | `cluster-admins`, `tier-free-users` | 200,000 tokens / 1h |
+| `qwen3-8b` | `cluster-admins` | 100,000 tokens / 1h |
 
 **Change limits** — edit the `MaaSSubscription` directly:
 
 ```bash
-oc edit maassubscription free-tier-subscription -n models-as-a-service
+oc edit maassubscription admin-subscription -n models-as-a-service
 ```
 
 Or patch a specific model's limit:
 
 ```bash
-oc patch maassubscription free-tier-subscription -n models-as-a-service --type=merge -p '{
+oc patch maassubscription admin-subscription -n models-as-a-service --type=merge -p '{
   "spec": {
     "modelRefs": [
       {
         "name": "qwen3-8b",
         "namespace": "llm-d-demo",
         "tokenRateLimits": [{"limit": 50000, "window": "1h"}]
-      },
-      {
-        "name": "opt-125m",
-        "namespace": "llm-d-demo",
-        "tokenRateLimits": [{"limit": 200000, "window": "1h"}]
       }
     ]
   }
@@ -1524,6 +1561,7 @@ oc get tokenratelimitpolicy maas-trlp-qwen3-8b -n llm-d-demo -o yaml
 | `maas-api` returns `404` on `/v1/api-keys` | `DB_CONNECTION_URL` not injected into `maas-api` deployment | Patch the deployment (Step 5c) |
 | Dashboard API keys / auth policies page returns `500` | Gateway OCP Route uses wrong hostname (`maas-default-gateway-openshift-ingress.*`) instead of `maas.*`; `maas-ui` sidecar gets HTML 503 | Re-apply the gateway chart — the chart now always uses `subdomain.<clusterDomain>` |
 | Gen AI studio → API keys or Settings → Authorization policies tabs missing | `vLLMDeploymentOnMaaS: false` or `maasAuthPolicies: false` in `OdhDashboardConfig` | Apply Step 7 patch (all four flags) and restart the dashboard |
+| Gen AI Studio `/gen-ai/api/v1/maas/models` returns `x509: certificate is valid for ...openshift-ingress.svc, not maas.<cluster-domain>` | `tls.secretName=ingress-certs` was passed to the gateway chart — the service-ca-operator replaced that secret with an internal-only cert; Envoy presents it to external clients | Re-apply the gateway chart with `--set tls.secretName=router-certs-default` (the OCP router wildcard cert, already trusted by all RHOAI components) |
 | Kueue UI options visible in dashboard but Kueue not installed | `disableKueue: false` hardcoded in `OdhDashboardConfig` | `oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge -p '{"spec":{"dashboardConfig":{"disableKueue":true}}}'` then restart dashboard |
 
 ---
@@ -1588,6 +1626,23 @@ oc adm groups add-users pro-users      bob
 oc adm groups add-users premium-users  alice
 ```
 
+**Ensure the `MaaSModelRef` for `qwen3-8b` exists:**
+
+The `MaaSSubscription` controller resolves model references at creation time — if the
+`MaaSModelRef` is missing the subscriptions enter `Failed` phase immediately.
+
+The inference chart creates it automatically when `maas.enabled=true`. Re-apply the chart if
+starting from a clean slate (e.g. after the Section 12 full reset):
+
+```bash
+helm template gitops/instance/llm-d/inference --name-template inference \
+  -n llm-d-demo \
+  -f gitops/instance/llm-d/inference/qwen3-8b-values.yaml \
+  --set maas.enabled=true \
+  | oc apply -n llm-d-demo -f -
+oc wait maasmodelref/qwen3-8b -n llm-d-demo --for=jsonpath='{.status.phase}'=Ready --timeout=60s
+```
+
 **Create MaaSSubscriptions (one per tier):**
 
 ```bash
@@ -1598,6 +1653,7 @@ metadata:
   name: freemium-subscription
   namespace: models-as-a-service
 spec:
+  priority: 1
   owner:
     groups:
       - name: freemium-users
@@ -1614,6 +1670,7 @@ metadata:
   name: pro-subscription
   namespace: models-as-a-service
 spec:
+  priority: 2
   owner:
     groups:
       - name: pro-users
@@ -1630,6 +1687,7 @@ metadata:
   name: premium-subscription
   namespace: models-as-a-service
 spec:
+  priority: 3
   owner:
     groups:
       - name: premium-users
@@ -1700,7 +1758,7 @@ apiVersion: kuadrant.io/v1alpha1
 kind: TokenRateLimitPolicy
 metadata:
   annotations:
-    maas.opendatahub.io/subscriptions: free-tier-subscription,freemium-subscription,premium-subscription,pro-subscription
+    maas.opendatahub.io/subscriptions: admin-subscription,freemium-subscription,premium-subscription,pro-subscription
   labels:
     app.kubernetes.io/component: token-rate-limit-policy
     app.kubernetes.io/managed-by: maas-controller
@@ -1712,14 +1770,14 @@ metadata:
   ...
 spec:
   limits:
-    models-as-a-service-free-tier-subscription-qwen3-8b-tokens:
+    models-as-a-service-admin-subscription-qwen3-8b-tokens:
       counters:
       - expression: auth.identity.userid
       rates:
       - limit: 100000
         window: 1h
       when:
-      - predicate: auth.identity.selected_subscription_key == "models-as-a-service/free-tier-subscription@llm-d-demo/qwen3-8b"
+      - predicate: auth.identity.selected_subscription_key == "models-as-a-service/admin-subscription@llm-d-demo/qwen3-8b"
           && !request.path.endsWith("/v1/models")
     models-as-a-service-freemium-subscription-qwen3-8b-tokens:
       counters:
@@ -1910,9 +1968,18 @@ oc adm groups remove-users freemium charlie
 oc adm groups add-users pro charlie
 ```
 
-*Terminal — charlie — create a new API key bound to pro-subscription:*
+*Terminal — charlie — revoke the old freemium key, then create a new one bound to pro-subscription:*
 ```bash
-# The old key is bound to freemium-subscription; charlie needs a new one.
+# Keys are bound to a subscription at creation time — the old freemium key would still
+# enforce freemium limits even after the group change. Revoke it first.
+CHARLIE_KEY_ID=$(curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys/search" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"filters":{},"sort":{"by":"created_at","order":"desc"},"pagination":{"limit":50,"offset":0}}}' \
+  | jq -re '[.data[] | select(.name == "charlie-demo-key")][0].id')
+curl -sk -X DELETE "https://${MAAS_GW}/maas-api/v1/api-keys/${CHARLIE_KEY_ID}" \
+  -H "Authorization: Bearer $(oc whoami -t)"
+
 CHARLIE_PRO_KEY=$(curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
@@ -1937,6 +2004,19 @@ for i in 1 2 3 4 5; do
 done
 echo "Charlie is no longer rate-limited."
 ```
+
+> **Key lifecycle note:** API keys are bound to a subscription **at creation time**. Moving a user
+> to a different group does not invalidate existing keys or change their rate limits — the old key
+> keeps working under its original subscription until it expires or is explicitly revoked.
+> This means a tier downgrade requires two steps: remove the user from the higher-tier group
+> **and** revoke their existing keys. Only then will new keys bind to the lower-tier subscription.
+>
+> To revoke a key by ID (admin terminal):
+> ```bash
+> curl -sk -X DELETE "https://${MAAS_GW}/maas-api/v1/api-keys/<key-id>" \
+>   -H "Authorization: Bearer $(oc whoami -t)"
+> # Returns the key object with "status": "revoked"; subsequent requests with it get 403.
+> ```
 
 ### 10.3 Reset / Cleanup
 
@@ -2215,6 +2295,55 @@ oc delete httproute qwen3-14b -n ${MODEL_NAMESPACE} 2>/dev/null || true
 
 ---
 
+## 12. Full MaaS Reset
+
+Use this when you want to wipe all demo state across both Section 10 (token rate limiting) and
+Section 11 (ExternalModel) and start the demos from a clean slate.
+
+The order matters: delete dependents before owners so the maas-controller can clean up the
+Kuadrant resources it manages (AuthPolicies, TokenRateLimitPolicies, HTTPRoutes) before the
+parent CRs disappear.
+
+```bash
+MODEL_NAMESPACE=llm-d-demo
+
+# 1. MaaSAuthPolicies — each one owns Kuadrant AuthPolicy objects; delete first
+oc delete maasauthpolicy --all -n models-as-a-service 2>/dev/null || true
+
+# 2. MaaSSubscriptions — each one owns Kuadrant TokenRateLimitPolicy objects
+oc delete maassubscription --all -n models-as-a-service 2>/dev/null || true
+
+# 3. MaaSModelRefs — each one owns an HTTPRoute on the MaaS gateway
+oc delete maasmodelref --all -n ${MODEL_NAMESPACE} 2>/dev/null || true
+
+# 4. ExternalModels — removes ext_proc routing and credential-store entries
+oc delete externalmodel --all -n ${MODEL_NAMESPACE} 2>/dev/null || true
+
+# 5. ExternalModel credential secret
+oc delete secret -n ${MODEL_NAMESPACE} -l inference.networking.k8s.io/bbr-managed=true \
+  2>/dev/null || true
+
+# 6. OpenShift Groups created by the demos (keeps cluster-admins and rhods-admins)
+oc delete group freemium-users pro-users premium-users 2>/dev/null || true
+
+# 7. (Optional) delete demo users — uncomment if you also want to remove the OCP user objects
+# oc delete user alice bob charlie 2>/dev/null || true
+# oc delete identity --all 2>/dev/null || true
+```
+
+Verify clean state:
+
+```bash
+oc get maasauthpolicy,maassubscription,maasmodelref -A
+oc get externalmodel -A
+oc get authpolicy,tokenratelimitpolicy -n ${MODEL_NAMESPACE}
+oc get groups
+```
+
+All six lists should be empty (except the two system groups).
+
+---
+
 ## Appendix A — Quick-Reference Commands
 
 ```bash
@@ -2355,3 +2484,108 @@ oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications
 | Will Authorino/Limitador work? | Yes, unaffected |
 | Will the RHOAI dashboard MaaS pages work? | Only if CA is in `openshift-config/user-ca-bundle` |
 | Is there a "skip TLS" env var in `maas-ui`? | No — CA bundle injection is the only supported path |
+
+## Appendix E — Token Rate Limiting: Behaviour and Observability
+
+### How limits are scoped
+
+Token limits are **per user, per model, per subscription window** — not shared across users.
+The `TokenRateLimitPolicy` generated by the maas-controller uses `auth.identity.userid` as the
+counter key:
+
+```yaml
+counters:
+- expression: auth.identity.userid
+rates:
+- limit: 3000
+  window: 5m
+```
+
+Ten users on the same `MaaSSubscription` each get the full 3 000-token/5 min budget
+independently. One user exhausting their allocation has zero effect on the others.
+
+### Who creates the TokenRateLimitPolicy
+
+The `maas-controller` creates and owns a single `TokenRateLimitPolicy` per model, named
+`maas-trlp-<model-name>`, in the model namespace. It consolidates all active subscriptions that
+reference that model into one resource:
+
+```
+app.kubernetes.io/managed-by: maas-controller
+maas.opendatahub.io/subscriptions: pro-subscription,premium-subscription
+```
+
+The owner reference points to the model's `HTTPRoute` — if the `LLMInferenceService` is deleted,
+Kubernetes garbage-collects the TRLP automatically.
+
+### Querying remaining tokens (Limitador REST API)
+
+Limitador exposes a REST API on port 8080 inside the `kuadrant-system` pod. Query active
+counters per model route:
+
+```bash
+LIMITADOR=$(oc get pod -n kuadrant-system -l app=limitador -o name | head -1 | cut -d/ -f2)
+
+# qwen3-8b (in llm-d-demo)
+oc exec $LIMITADOR -n kuadrant-system -- \
+  curl -s "http://127.0.0.1:8080/counters/llm-d-demo%2Fqwen3-8b-kserve-route" \
+  | python3 -m json.tool
+
+# nemotron (in maas-demo)
+oc exec $LIMITADOR -n kuadrant-system -- \
+  curl -s "http://127.0.0.1:8080/counters/maas-demo%2Fnemotron-9b-v2-fp8-dynamic-kserve-route" \
+  | python3 -m json.tool
+```
+
+Each entry in the response shows `remaining`, `expires_in_seconds`, and the `userid` that owns it:
+
+```json
+{
+  "limit": { "name": "pro-subscription-qwen3-...", "max_value": 3000, "seconds": 300 },
+  "set_variables": { "auth.identity.userid": "bob" },
+  "remaining": 1883,
+  "expires_in_seconds": 61
+}
+```
+
+Counters only appear when at least one request has landed in the current window; an empty `[]`
+means no tokens have been consumed yet (counter is at max, not at zero).
+
+### Limitador u64 underflow — misleading `remaining` values
+
+When a user exceeds their limit, Limitador computes `remaining = max_value - consumed`. If
+`consumed > max_value` the subtraction wraps as an unsigned 64-bit integer, producing a very
+large number instead of zero:
+
+```
+max_value=500, consumed=1055 → 500 - 1055 = -555 → wraps to 2^64 - 555 = 18446744073709551061
+```
+
+A `remaining` value **larger than `max_value`** means the limit has been exceeded, not that
+capacity is available. The window reset time is still accurate (`expires_in_seconds`).
+
+Use this snippet to interpret the raw counter correctly:
+
+```bash
+LIMITADOR=$(oc get pod -n kuadrant-system -l app=limitador -o name | head -1 | cut -d/ -f2)
+ROUTE="maas-demo%2Fnemotron-9b-v2-fp8-dynamic-kserve-route"
+
+oc exec $LIMITADOR -n kuadrant-system -- \
+  curl -s "http://127.0.0.1:8080/counters/${ROUTE}" \
+  | python3 -c "
+import json, sys
+for c in json.load(sys.stdin):
+    max_v = c['limit']['max_value']
+    rem   = c['remaining']
+    actual = rem if rem <= max_v else 0
+    user  = list(c['set_variables'].values())[0]
+    print(f\"{user}: {actual}/{max_v} remaining, resets in {c['expires_in_seconds']}s\")
+"
+```
+
+### Subscription is baked into the API key at creation time
+
+A user's API key is bound to a specific subscription when it is created. Changing a user's
+group membership (and therefore their eligible subscriptions) does **not** re-bind existing
+keys — the old limits remain in effect until the key is revoked and a new one is created under
+the desired subscription.

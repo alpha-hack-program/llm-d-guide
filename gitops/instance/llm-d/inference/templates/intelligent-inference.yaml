@@ -54,7 +54,8 @@ metadata:
   name: {{ .Values.serviceName }}
   annotations:
     opendatahub.io/model-type: generative
-    openshift.io/display-name: "{{ .Values.serviceName }}"
+    opendatahub.io/runtime-version: {{ .Values.runtime.version}}
+    openshift.io/display-name: "{{ .Values.model.name }}"
     security.opendatahub.io/enable-auth: "{{ $enableAuth }}"
     opendatahub.io/hardware-profile-namespace: {{ .Values.hardwareProfile.namespace }}
     opendatahub.io/hardware-profile-name: {{ $hwProfile }}
@@ -177,10 +178,6 @@ spec:
             {{- if .Values.resources.requests.gpuCount }}
             nvidia.com/gpu: {{ .Values.resources.requests.gpuCount | quote }}
             {{- end }}
-        {{- if or (and .Values.intelligentInferenceSimple .Values.useStartupProbe) (eq .Values.updateStrategy "Recreate") }}
-        strategy:
-          type: Recreate
-        {{- end }}
         {{- if and .Values.intelligentInferenceSimple .Values.useStartupProbe }}
         livenessProbe:
           initialDelaySeconds: 10
@@ -204,4 +201,16 @@ spec:
           timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
           failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
         {{- end }}
+{{- end }}
+
+{{- if and (eq .Values.deploymentType "intelligent-inference") .Values.maas.enabled }}
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: {{ .Values.serviceName }}
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: {{ .Values.serviceName }}
 {{- end }}

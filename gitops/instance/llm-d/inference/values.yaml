@@ -29,6 +29,11 @@ schedulerTLS:
 # Name of the LLMInferenceService (also used as PVC name when storage.pvc is set)
 serviceName: my-model
 
+# Runtime
+runtime:
+  version: v0.18.0
+  displayName: llm-d
+
 # Number of decode / main replicas
 replicas: 1
 
@@ -65,8 +70,8 @@ resources:
 # Auto-selected: GPU image when resources.*.gpuCount is set, CPU image otherwise.
 # Set override to force a specific image regardless of gpuCount.
 images:
-  gpu: "registry.redhat.io/rhaii-early-access/vllm-cuda-rhel9@sha256:abf0fd7398a18c47a754218b0cbd76ea300b0c6da5fb8d801db8c165df5022ca"
-  cpu: "registry.redhat.io/rhaii-early-access/vllm-cpu-rhel9@sha256:7e227326e7975818040fde0cfcaf2683fe4050558f36badcb826a9085ada7fca"
+  gpu: "registry.redhat.io/rhaii/vllm-cuda-rhel9@sha256:ad06abf3bb5235ebb5b2df84cd1b9fd09e823f0ff2eebfc82bb4590275ccfe0b"
+  cpu: "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:dd104214095322ca92fb71149ae2bea8cfff54d6d261079740f673a840ed0795"
   override: ""
 
 # ── CPU-specific vLLM settings ────────────────────────────────────────────────
@@ -93,7 +98,8 @@ env: []
 #         key: token
 
 # ── MaaS integration ──────────────────────────────────────────────────────────
-# When enabled: sets enable-auth to true and routes traffic through the MaaS gateway.
+# When enabled: sets enable-auth to true, routes traffic through the MaaS gateway,
+# and creates a MaaSModelRef so the model appears in the subscription management UI.
 # Access control is managed by MaaSSubscription + MaaSAuthPolicy CRDs in the
 # models-as-a-service namespace — create those separately after deploying the model.
 maas:
@@ -105,14 +111,6 @@ maas:
 # ── Auth ──────────────────────────────────────────────────────────────────────
 # Overridden to true automatically when maas.enabled is set.
 enableAuth: false
-
-# ── Update strategy ──────────────────────────────────────────────────────────
-# NOTE: the LLMInferenceService CRD does not expose a strategy field — the
-# operator controls the underlying Deployments directly. The scheduler
-# Deployment is always Recreate; the main workload Deployment is always
-# RollingUpdate. This value is reserved for potential future CRD support and
-# currently has no effect.
-updateStrategy: ""
 
 # ── Liveness / startup probe ─────────────────────────────────────────────────
 # When useStartupProbe is true: emit startupProbe + minimal livenessProbe.

@@ -39,7 +39,7 @@ spec:
     mlflowoperator:
       managementState: {{ if (.Values.mlflow | default false) }}Managed{{ else }}Removed{{ end }}
     ray:
-      managementState: Managed
+      managementState: {{ if (.Values.distributedWorkloads | default false) }}Managed{{ else }}Removed{{ end }}
     workbenches:
       workbenchNamespace: {{ .Values.dsc.workbenchNamespace | default "rhods-notebooks" }}
       managementState: Managed

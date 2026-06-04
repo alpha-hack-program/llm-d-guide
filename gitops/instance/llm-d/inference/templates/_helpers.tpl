@@ -17,7 +17,8 @@ Validate storage: must be set, have uri, and type must be hf or oci.
 {{- if not .Values.storage.uri }}
 {{- fail "values.storage.uri is required" }}
 {{- end }}
-{{- if and (ne .Values.storage.type "hf") (ne .Values.storage.type "oci") }}
-{{- fail (printf "values.storage.type must be one of hf, oci, got %q" .Values.storage.type) }}
+{{- $storageType := .Values.storage.type | default "hf" }}
+{{- if and (ne $storageType "hf") (ne $storageType "oci") }}
+{{- fail (printf "values.storage.type must be one of hf, oci, got %q" $storageType) }}
 {{- end }}
 {{- end }}

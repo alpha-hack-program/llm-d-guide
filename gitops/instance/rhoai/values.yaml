@@ -20,7 +20,7 @@ kueue: false                 # Kueue operator
 llamaStack: true            # LlamaStack operator
 modelRegistry: true         # Model registry + dashboard menu
 mlflow: true                # MLflow operator + MLflow instance CR
-trustyai: true              # TrustyAI
+trustyai: false             # TrustyAI
 
 # --- DSCInitialization (dsci) ---
 # Only a few overrides; rest matches original defaults.

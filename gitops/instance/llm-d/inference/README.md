@@ -147,17 +147,22 @@ vllmAdditionalArgs: "--disable-uvicorn-access-log --enable-auto-tool-choice --to
 
 ### Update strategy
 
-| Value | Default | Description |
-|---|---|---|
-| `updateStrategy` | `""` | Reserved — currently no-op (see note below) |
+The `LLMInferenceService` CRD does not expose a deployment strategy field — confirmed via
+`oc explain llminferenceservice.spec.template.containers.strategy` (field does not exist).
+The operator controls the underlying Deployments directly with hardcoded values:
 
-**Current CRD limitation:** the `LLMInferenceService` CRD does not expose a strategy field.
-The operator controls the underlying Deployments directly:
-- Scheduler Deployment — always `Recreate` (set by the operator)
+- Scheduler Deployment — always `Recreate`
 - Main workload Deployment — always `RollingUpdate`
 
-The `updateStrategy` value is wired into the template for forward compatibility but is silently
-dropped by the API server in the current CRD version.
+There is no supported way to override this through the CR spec. The chart previously exposed
+an `updateStrategy` value and emitted a `strategy` block inside the container spec, but this
+was silently ignored by the API server and has been removed.
+
+**Practical consequence with RollingUpdate on GPU clusters:** if all GPU nodes are fully
+utilised, the rolling update will stall — the new pod cannot schedule until an old one is
+terminated, but the controller waits for the new pod to be Ready before terminating the old
+one. Unblock it by deleting the old pods manually so the controller scales down the old
+ReplicaSet.
 
 ### Extra env vars
 
