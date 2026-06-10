@@ -137,6 +137,8 @@ oc get secret pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfig
 
 **Human gate:** Confirm env vars, region, and that all checks pass before proceeding.
 
+**End of Phase 0:** Stop here and report validation results to the user. Wait for confirmation before proceeding to Phase 1.
+
 ---
 
 ## Phase 1 — ArgoCD + cert-manager + Let's Encrypt
@@ -152,10 +154,60 @@ oc get secret pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfig
 
 Do NOT pass `--set cloud=aws` (or `cloud=none`) without an explicit answer from the user.
 
+**MANDATORY: Validate cluster domain extraction (AWS only):**
+
+Before applying the cert-manager-route53 chart, run the validation script to ensure the cluster
+domain is extracted correctly:
+
+```bash
+./scripts/validate-cluster-domain.sh
+```
+
+This script validates by comparing the base domain against the cluster's apps domain:
+- Extracts `dns.config/cluster .spec.baseDomain` (cluster base domain)
+- Extracts `ingresses.config/cluster .spec.domain` (apps domain)
+- Validates that apps domain == `apps.<baseDomain>` (platform-agnostic check)
+- Outputs the correct values to use with the cert-manager-route53 chart
+
+**Critical validation:** The value must match what's actually in the cluster's `dns.config/cluster .spec.baseDomain`
+
+The validation compares what you extracted against the cluster's actual apps domain:
+- If cluster has: baseDomain=`mycluster.example.com`, apps=`apps.mycluster.example.com`
+  - ✅ Correct extraction: `mycluster.example.com` (matches cluster)
+  - ❌ Wrong extraction: `example.com` (doesn't match - you got the parent domain instead)
+
+The validation works for ANY OpenShift cluster by checking internal consistency.
+
+If the validation script fails, **stop** and fix the domain extraction before proceeding.
+
+**⚠️ CRITICAL — Confirm cluster domain with the user:**
+
+After running the validation script, **STOP and ask the user to confirm** that the extracted cluster domain is correct:
+
+> "The validation script extracted the cluster base domain as: `<extracted-domain>`
+> 
+> Is this correct? This value is CRITICAL for Let's Encrypt certificate issuance. If wrong, certificates will fail to validate and Phase 1 cannot succeed.
+> 
+> Please confirm before I proceed with cert-manager-route53 installation."
+
+Do NOT proceed with applying the cert-manager-route53 chart until the user explicitly confirms the domain is correct.
+
+**Route53 zone accessibility check (AWS only):**
+
+After validation, verify that Route53 zones are accessible via the cluster's AWS credentials:
+- The OpenShift installer creates a **private** hosted zone for the cluster base domain
+- The **public parent zone** must be accessible for DNS-01 challenges to work
+- For AWS IPI clusters, both zones are typically in the same AWS account
+
+If Route53 zones are not accessible (e.g., DNS hosted externally), **stop here** and ask the user whether to:
+1. Switch to `cloud=none` and manual certificates
+2. Use HTTP-01 challenges instead of DNS-01 (if applicable)
+3. Skip TLS automation for this phase
+
 **Install order:**
 1. *(Optional)* Red Hat OpenShift GitOps (ArgoCD) — via OperatorHub UI or CLI. Not required if applying manifests directly with `helm template | oc apply`.
 2. cert-manager operator — `helm template gitops/operators/cert-manager-operator --set cloud=${CLOUD} | oc apply -f -` where `CLOUD` is `aws` or `none` (confirmed with user above). ArgoCD `Application` path documented in README section 3.1 as an alternative.
-3. Let's Encrypt ClusterIssuers + certificates for Ingress and API — `helm template gitops/operators/cert-manager-route53 --set clusterDomain=<apps-domain> --set route53.region=<region> | oc apply -f -`
+3. Let's Encrypt ClusterIssuers + certificates for Ingress and API — `helm template gitops/operators/cert-manager-route53 --set clusterDomain=<base-domain> --set route53.region=<region> | oc apply -f -` (where `base-domain` is from `oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}'`, NOT the apps ingress domain)
 
 **Key wait condition:**
 ```bash
@@ -173,6 +225,8 @@ oc get certificates.cert-manager.io --all-namespaces \
 **Known gotchas:**
 - The first `helm template | oc apply` will fail on the `CertManager` CR because the operator CRD isn't registered until the CSV reaches `Succeeded`. Wait for `Succeeded`, then re-run the same command — it applies cleanly on the second pass.
 - If using ArgoCD: if the cert-manager webhook is slow to start, the ArgoCD sync may fail on the first attempt. Re-sync after all 3 pods are Running.
+
+**End of Phase 1:** Stop here and report certificate status to the user. All certificates must show `READY=True`. Wait for confirmation before proceeding to Phase 2.
 
 ---
 
@@ -231,6 +285,8 @@ oc get nodes -o json | jq '.items[].status.capacity | select(."nvidia.com/gpu")'
 **Human gate:** At least one node must show `nvidia.com/gpu` capacity before moving on. If nodes are still provisioning, wait — this can take 10–15 minutes on AWS.
 
 **Known gotcha:** The ClusterPolicy webhook may reject the CR if the NFD labels aren't present yet. Apply NFD first, wait for labels, then apply nvidia.
+
+**End of Phase 2:** Stop here and report GPU node status to the user. Show the output of the GPU capacity check. Wait for confirmation before proceeding to Phase 3.
 
 ---
 
@@ -450,6 +506,8 @@ oc get csv -n openshift-operators -w | grep -E "pipelines"
 - Do NOT install OpenShift Service Mesh 2.x — its CRDs conflict with the llm-d gateway. Service Mesh 3.x is only for **Llama Stack Operator**; it is not required for base RHOAI or llm-d.
 - Serverless operator is NOT required for RHOAI 3.x (raw KServe deployment mode).
 
+**End of Phase 3:** Stop here and report operator status to the user. Run `./scripts/check-operators.sh` and show the results. All required operators must be `Succeeded`. Wait for confirmation before proceeding to Phase 4.
+
 ---
 
 ## Phase 4 — Monitoring Stack
@@ -470,6 +528,8 @@ oc apply -k gitops/operators/grafana-operator
 ```
 
 **Human gate:** Optional. Confirm Grafana route is accessible if you want dashboards during llm-d testing.
+
+**End of Phase 4:** Stop here and report monitoring stack status to the user. Show the CSV status for all three operators (Tempo, OpenTelemetry, Grafana). Wait for confirmation before proceeding to Phase 5.
 
 ---
 
@@ -523,6 +583,30 @@ oc get pods -n redhat-ods-applications \
 - For MoE models (DeepSeek-R1, Mixtral), use the **Wide Expert-Parallelism** well-lit path which requires LeaderWorkerSet for multi-node orchestration.
 - **Model Registry / model-catalog API 500:** If migrations did not apply, restart model-catalog: `oc rollout restart deployment/model-catalog -n rhoai-model-registries` (README Appendix B).
 
+**Verify intelligent routing is working (recommended):**
+
+Run the verification script to confirm EPP scheduler is making routing decisions and prefix cache is operational:
+
+```bash
+./scripts/verify-intelligent-router.sh
+```
+
+**Expected output:**
+- 20/20 requests return HTTP 200
+- Prefix cache queries increase by ~680 tokens
+- Prefix cache hits increase by ~640 tokens (~94% hit rate)
+- EPP logs show 20 "Request handled" routing decisions with selected endpoints
+
+**What this proves:**
+- ✅ Gateway routes through InferencePool (not basic Service LB)
+- ✅ EPP scheduler making per-request routing decisions via gRPC
+- ✅ Prefix cache optimization active (94% hit rate)
+- ✅ Full llm-d intelligent routing stack operational
+
+For detailed explanation, architecture diagrams, troubleshooting, and multi-replica testing, see: [llm-d Intelligent Routing Verification Guide](LLMD-INTELLIGENT-ROUTING-VERIFICATION.md)
+
+**End of Phase 5:** Stop here and report the llm-d Quick Start test results to the user. Show the curl test output (chat completion response) and optionally the verification script results. If the model returns a coherent answer and intelligent routing is verified, the deployment is successful. Wait for confirmation before proceeding to Phase 6.
+
 ---
 
 ## Phase 6 — MaaS
@@ -567,22 +651,47 @@ oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
    oc get secret maas-db-config -n redhat-ods-applications
    ```
 
-3. **Authorino TLS** — must be configured in order (4a → 4b → 4c → 4d). If the annotation is already present, remove then re-add it:
-   ```bash
-   # Remove annotation if already set, to force maas-controller to create the TLS EnvoyFilter
-   oc annotate gateway maas-default-gateway -n openshift-ingress \
-     security.opendatahub.io/authorino-tls-bootstrap-
-   oc annotate gateway maas-default-gateway -n openshift-ingress \
-     security.opendatahub.io/authorino-tls-bootstrap="true"
-   # Verify TLS EnvoyFilter was created
-   oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress
-   ```
-
-4. **Enable MaaS in the DataScienceCluster** — re-apply the RHOAI instance chart with `modelsAsService=true` **after** the gateway (Step 1) and database (Step 2) are ready:
+3. **Enable MaaS in the DataScienceCluster** — re-apply the RHOAI instance chart with `modelsAsService=true` **after** the gateway (Step 1) and database (Step 2) are ready. This creates the `maas-controller` and `maas-api` pods:
    ```bash
    helm template rhoai ./gitops/instance/rhoai --set modelsAsService=true | oc apply -f -
    oc wait --for=condition=ready pod -l app.kubernetes.io/name=maas-api \
      -n redhat-ods-applications --timeout=120s
+   ```
+
+4. **Authorino TLS** — must be configured in order (4a → 4b → 4c → 4d). **IMPORTANT:** This step requires the `maas-controller` pod from Step 3 to be running. The maas-controller creates the TLS EnvoyFilter when the gateway annotation changes:
+   ```bash
+   # 4a. Annotate Authorino service for serving cert
+   oc annotate service authorino-authorino-authorization \
+     -n kuadrant-system \
+     service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert \
+     --overwrite
+
+   # 4b. Enable TLS on the Authorino CR
+   oc patch authorino authorino -n kuadrant-system --type=merge --patch '{
+     "spec": {
+       "listener": {
+         "tls": {
+           "enabled": true,
+           "certSecretRef": {"name": "authorino-server-cert"}
+         }
+       }
+     }
+   }'
+
+   # 4c. Configure Authorino to validate certs using the cluster CA bundle
+   oc -n kuadrant-system set env deployment/authorino \
+     SSL_CERT_FILE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
+     REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt
+   oc rollout status deployment/authorino -n kuadrant-system --timeout=90s
+
+   # 4d. Annotate the gateway to trigger maas-controller to create the TLS EnvoyFilter
+   oc annotate gateway maas-default-gateway -n openshift-ingress \
+     security.opendatahub.io/authorino-tls-bootstrap="true" \
+     --overwrite
+
+   # Verify TLS EnvoyFilter was created
+   sleep 5
+   oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress
    ```
 
 5. **Bootstrap subscription namespace** — `models-as-a-service` namespace + `default-tenant` CR (name is exact):
@@ -590,7 +699,7 @@ oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
    oc create namespace models-as-a-service --dry-run=client -o yaml | oc apply -f -
    ```
 
-6. **Register models** — create `MaaSModelRef`, `MaaSSubscription`, `MaaSAuthPolicy` in `models-as-a-service` (see README §9.2 Steps 6a–6c).
+6. **Register models** — create `MaaSModelRef`, `MaaSSubscription`, `MaaSAuthPolicy` in `models-as-a-service` (see README §9.2 Step 7 for detailed examples).
 
 7. **Enable dashboard flags** — all four must be `true`:
    ```bash
@@ -618,6 +727,8 @@ oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
 - `LLMInferenceService` `HTTPRoutesReady: False` — `NotAllowedByListeners`: model namespace not in `gateway.modelNamespaces`. Re-apply the gateway chart with the correct namespace set.
 - `MaaSAuthPolicy` status loop in controller logs (`"failed to update MaaSAuthPolicy status"`) — harmless controller/CRD version mismatch. Auth and rate limiting work correctly despite this.
 - **EA2 → stable 3.4 migration only:** If `maas-controller` or `maas-api` Deployment shows an immutable selector error in the DSC, delete both Deployments and force a DSC reconcile — see `PATCH-MAAS.md §8`.
+
+**End of Phase 6:** Stop here and report the MaaS smoke test results to the user. Show the API key creation response (must be HTTP 201 with a `sk-oai-*` key) and the model call response (must be HTTP 200). Installation is complete.
 
 ---
 

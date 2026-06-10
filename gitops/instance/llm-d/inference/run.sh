@@ -18,9 +18,9 @@
 #   sh run.sh | oc apply -f -
 #
 # Direct helm template (from this directory):
-#   helm template . --name-template inference -n demo-llm -f values.yaml
-#   helm template . --name-template inference -n demo-llm -f values.yaml -f my-override.yaml
-#   helm template . --name-template inference -n demo-llm --set serviceName=my-model --set-string storage.uri="oci://registry.redhat.io/..."
+#   helm template inference . -n demo-llm -f values.yaml
+#   helm template inference . -n demo-llm -f values.yaml -f my-override.yaml
+#   helm template inference . -n demo-llm --set serviceName=my-model --set-string storage.uri="oci://registry.redhat.io/..."
 
 APP_NAME=inference
 
@@ -38,7 +38,7 @@ model:
   name: "${MODEL_NAME:-facebook/opt-125m}"
 EOF
 
-helm template . --name-template ${APP_NAME} \
+helm template ${APP_NAME} . \
   -n "${NAMESPACE:-demo-llm}" \
   -f "${TMPFILE}" \
   --include-crds

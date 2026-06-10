@@ -22,6 +22,22 @@ check "OpenShift 4.19+" "oc version | grep -E 'Server Version: 4\.(19|[2-9][0-9]
 check "Cluster admin access" "oc auth can-i '*' '*' --all-namespaces"
 check "GPU nodes available" "oc get nodes -l nvidia.com/gpu.present=true | grep -v NAME"
 
+# Cluster domain validation (platform-agnostic)
+CLUSTER_DOMAIN=$(oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}' 2>/dev/null)
+APPS_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null)
+EXPECTED_APPS="apps.${CLUSTER_DOMAIN}"
+
+if [[ -n "${CLUSTER_DOMAIN}" ]] && [[ -n "${APPS_DOMAIN}" ]] && [[ "${APPS_DOMAIN}" == "${EXPECTED_APPS}" ]]; then
+  echo "[PASS] Cluster domain correctly extracted: ${CLUSTER_DOMAIN}"
+  ((PASS++))
+elif [[ -n "${CLUSTER_DOMAIN}" ]] && [[ -n "${APPS_DOMAIN}" ]] && [[ "${APPS_DOMAIN}" != "${EXPECTED_APPS}" ]]; then
+  echo "[FAIL] Cluster domain mismatch - apps domain is '${APPS_DOMAIN}' but expected '${EXPECTED_APPS}'"
+  ((FAIL++))
+else
+  echo "[FAIL] Could not extract or validate cluster domain"
+  ((FAIL++))
+fi
+
 # Operator checks
 check "Cert Manager installed" "oc get csv -A | grep -i cert-manager | grep -i succeeded"
 check "Service Mesh 3 installed" "oc get csv -n openshift-operators | grep -i servicemesh | grep -i succeeded"

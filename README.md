@@ -340,9 +340,28 @@ while [[ $(oc get pods -l app.kubernetes.io/instance=cert-manager -n cert-manage
 done
 echo -e "  [OK]"
 
-# 2) Detect cluster domain and AWS region
+# 2) Validate and extract cluster domain
+# CRITICAL: Run validation script to ensure correct domain extraction
+./scripts/validate-cluster-domain.sh
+
 CLUSTER_DOMAIN=$(oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}')
 AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:=eu-west-1}"
+
+# Route53 Prerequisite Check (AWS only)
+# ⚠️  The cert-manager Route53 DNS-01 solver requires that the cluster's DNS hosted zone
+#     (spec.baseDomain from dns.config/cluster) is present in Route53 in the AWS account
+#     accessible via the cluster's cloud credentials.
+#
+# COMMON MISTAKE: Using a value that doesn't match the cluster's actual baseDomain
+#
+# The CLUSTER_DOMAIN must exactly match: oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}'
+#
+# Example: If your cluster's baseDomain is "mycluster.example.com":
+#   ✅ Correct:  CLUSTER_DOMAIN=mycluster.example.com (matches cluster's baseDomain)
+#   ❌ Wrong:    CLUSTER_DOMAIN=example.com (doesn't match - you extracted the parent domain instead)
+#
+# The validation script checks: does apps.${CLUSTER_DOMAIN} match the cluster's actual apps domain?
+# If it fails, the CLUSTER_DOMAIN doesn't match what's in the cluster.
 
 [[ -z "${CLUSTER_DOMAIN}" ]] && { echo "Error: CLUSTER_DOMAIN could not be detected."; exit 1; }
 [[ -z "${AWS_DEFAULT_REGION}" ]] && { echo "Error: AWS_DEFAULT_REGION is not set."; exit 1; }
@@ -891,8 +910,8 @@ EOF
 Render and apply:
 
 ```bash
-helm template gitops/instance/llm-d/inference \
-  --name-template qwen3-8b -n ${PROJECT} \
+helm template qwen3-8b gitops/instance/llm-d/inference \
+  -n ${PROJECT} \
   -f gitops/instance/llm-d/inference/values.yaml \
   -f qwen3-8b-fp8-dynamic-oci.tmp.yaml \
   --include-crds | oc apply -f -
@@ -916,8 +935,8 @@ resources:
   requests: { cpu: "1", memory: 4Gi, gpuCount: 1 }
 EOF
 
-helm template gitops/instance/llm-d/inference \
-  --name-template opt-125m -n ${PROJECT} \
+helm template opt-125m gitops/instance/llm-d/inference \
+  -n ${PROJECT} \
   -f gitops/instance/llm-d/inference/values.yaml \
   -f facebook-opt-125m-hf.tmp.yaml \
   --include-crds | oc apply -f -
@@ -1021,6 +1040,27 @@ oc get route grafana -n llm-d-monitoring -o jsonpath='{.spec.host}'
 
 Access Grafana with default credentials: `admin` / `admin`
 
+## Step 7: Verify Intelligent Routing (Recommended)
+
+After deploying your first model, verify that llm-d's KV-cache-aware intelligent routing is operational:
+
+```bash
+./scripts/verify-intelligent-router.sh
+```
+
+**What this proves:**
+- ✅ EPP scheduler making per-request routing decisions
+- ✅ Prefix cache optimization active (~94% hit rate)
+- ✅ Full llm-d stack operational (not falling back to basic round-robin)
+
+**Expected output:**
+- 20/20 HTTP 200 responses
+- Prefix cache queries increase by ~680 tokens
+- Prefix cache hits increase by ~640 tokens
+- EPP logs show 20 "Request handled" routing decisions
+
+For detailed explanation of the architecture, troubleshooting, and multi-replica testing, see: [llm-d Intelligent Routing Verification Guide](LLMD-INTELLIGENT-ROUTING-VERIFICATION.md)
+
 ---
 
 ## Quick Start Summary
@@ -1029,7 +1069,7 @@ Access Grafana with default credentials: `admin` / `admin`
 | --- | --- | --- |
 | 1. Configure Gateway | `CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}'); helm template gitops/instance/llm-d/gateway --name-template gateway --set clusterDomain="${CLUSTER_DOMAIN}" --include-crds \| oc apply -f -` | `oc get gateway -n openshift-ingress` |
 | 2. Create namespace | `PROJECT=llm-d-demo; oc new-project ${PROJECT}; oc label namespace ${PROJECT} modelmesh-enabled=false opendatahub.io/dashboard=true` | `oc get ns ${PROJECT}` |
-| 3. Deploy model | Create override file (see Step 3), then: `helm template gitops/instance/llm-d/inference --name-template qwen3-8b -n ${PROJECT} -f gitops/instance/llm-d/inference/values.yaml -f qwen3-8b-fp8-dynamic-oci.tmp.yaml --include-crds \| oc apply -f -` | `oc get llminferenceservice -n ${PROJECT}` |
+| 3. Deploy model | Create override file (see Step 3), then: `helm template qwen3-8b gitops/instance/llm-d/inference -n ${PROJECT} -f gitops/instance/llm-d/inference/values.yaml -f qwen3-8b-fp8-dynamic-oci.tmp.yaml --include-crds \| oc apply -f -` | `oc get llminferenceservice -n ${PROJECT}` |
 | 4. Test endpoint | `INFERENCE_URL=$(oc get gateway openshift-ai-inference -n openshift-ingress -o json \| jq -r '.spec.listeners[] \| select(.name=="https").hostname'); curl -s https://${INFERENCE_URL}/${PROJECT}/qwen3-8b/v1/models \| jq` | JSON response |
 
 ---
@@ -1276,7 +1316,7 @@ oc get secret maas-db-config -n redhat-ods-applications
 
 **Step 4 — Enable MaaS in the DataScienceCluster:**
 
-> **Why this order matters:** `modelsAsService` is kept `false` in `gitops/instance/rhoai/values.yaml` during Phase 3 (RHOAI install). The `maas-api` pod requires both the MaaS gateway (Step 2) and the database secret (Step 3) to exist before it can start. Re-apply the chart here, after both are in place.
+> **Why this order matters:** `modelsAsService` is kept `false` in `gitops/instance/rhoai/values.yaml` during Phase 3 (RHOAI install). The `maas-api` pod requires both the MaaS gateway (Step 2) and the database secret (Step 3) to exist before it can start. Re-apply the chart here, after both are in place. This step creates the `maas-controller` and `maas-api` pods, which are required for Step 5 (Authorino TLS configuration).
 
 ```bash
 helm template rhoai ./gitops/instance/rhoai --set modelsAsService=true | oc apply -f -
@@ -1287,18 +1327,20 @@ oc wait --for=condition=ready pod -l app.kubernetes.io/name=maas-api \
 oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
 ```
 
-**Step 4 — Configure Authorino TLS:**
+**Step 5 — Configure Authorino TLS:**
+
+> **IMPORTANT:** This step requires the `maas-controller` pod from Step 4 to be running. The maas-controller creates the TLS EnvoyFilter when the gateway annotation changes.
 
 This is required for the MaaS API gateway to communicate with Authorino securely. Without it, the `maas-api/v1/api-keys` endpoint returns `500 Internal Server Error`.
 
 ```bash
-# 4a. Generate a serving certificate for Authorino (service-ca-operator signs it)
+# 5a. Generate a serving certificate for Authorino (service-ca-operator signs it)
 oc annotate service authorino-authorino-authorization \
   -n kuadrant-system \
   service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert \
   --overwrite
 
-# 4b. Enable TLS on the Authorino CR
+# 5b. Enable TLS on the Authorino CR
 oc patch authorino authorino -n kuadrant-system --type=merge --patch '{
   "spec": {
     "listener": {
@@ -1310,14 +1352,14 @@ oc patch authorino authorino -n kuadrant-system --type=merge --patch '{
   }
 }'
 
-# 4c. Configure Authorino to validate certs using the cluster CA bundle
+# 5c. Configure Authorino to validate certs using the cluster CA bundle
 oc -n kuadrant-system set env deployment/authorino \
   SSL_CERT_FILE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
   REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt
 oc rollout status deployment/authorino -n kuadrant-system --timeout=90s
 
-# 4d. Annotate the gateway — maas-controller creates an EnvoyFilter for Authorino TLS.
-#     IMPORTANT: Do this AFTER steps 4a-4c, or remove+re-add the annotation to force
+# 5d. Annotate the gateway — maas-controller creates an EnvoyFilter for Authorino TLS.
+#     IMPORTANT: Do this AFTER steps 5a-5c, or remove+re-add the annotation to force
 #     the maas-controller to reconcile and create the maas-default-gateway-authn-ssl filter.
 oc annotate gateway maas-default-gateway \
   -n openshift-ingress \
@@ -1341,7 +1383,7 @@ oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress
 # Expected: present (created by maas-controller after annotation)
 ```
 
-**Step 5 — Bootstrap the MaaS 3.4 subscription namespace:**
+**Step 6 — Bootstrap the MaaS 3.4 subscription namespace:**
 
 MaaS 3.4 uses `Tenant`, `MaaSModelRef`, `MaaSSubscription`, and `MaaSAuthPolicy` CRs. All live in the `models-as-a-service` namespace.
 
@@ -1376,7 +1418,7 @@ oc patch deployment maas-api -n redhat-ods-applications --type=json -p='[{
 oc rollout status deployment/maas-api -n redhat-ods-applications --timeout=60s
 ```
 
-**Step 6 — Register models and create subscription/auth policies:**
+**Step 7 — Register models and create subscription/auth policies:**
 
 For each model namespace (repeat `MaaSModelRef` for every `LLMInferenceService` you want to publish):
 
@@ -1431,7 +1473,7 @@ spec:
 EOF
 ```
 
-**Step 7 — Enable the dashboard interface and MaaS auth policies:**
+**Step 8 — Enable the dashboard interface and MaaS auth policies:**
 
 ```bash
 oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge \
@@ -1554,7 +1596,7 @@ oc get tokenratelimitpolicy maas-trlp-qwen3-8b -n llm-d-demo -o yaml
 | `maas-api` pod not starting | Kuadrant CR not Ready or `maas-default-gateway` missing | Check `oc get kuadrant -n kuadrant-system` and `oc get gateway maas-default-gateway -n openshift-ingress` |
 | Kuadrant CR `Ready: False` — `MissingDependency` on OCP 4.19+ | Operator started before detecting OCP built-in Gateway API | Delete the operator pod to force a restart: `oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator` |
 | No `AuthConfig` resources after enabling MaaS | Kuadrant operator not running / CR not Ready | Verify `oc get kuadrant -n kuadrant-system` shows `Ready: True` |
-| `POST /maas-api/v1/api-keys` returns `500` | Authorino TLS not configured; Envoy→Authorino connection uses plain gRPC but Authorino expects TLS | Run Step 4 (Authorino TLS) then remove+re-add the gateway `authorino-tls-bootstrap` annotation |
+| `POST /maas-api/v1/api-keys` returns `500` | Authorino TLS not configured; Envoy→Authorino connection uses plain gRPC but Authorino expects TLS | Run Step 5 (Authorino TLS) then remove+re-add the gateway `authorino-tls-bootstrap` annotation |
 | `maas-default-gateway-authn-ssl` EnvoyFilter missing | Gateway annotation applied before Authorino TLS was enabled | Remove annotation (`oc annotate gateway ... security.opendatahub.io/authorino-tls-bootstrap-`) then re-add it |
 | `401 Unauthorized` on model calls | Using OpenShift token directly — MaaS requires `sk-oai-*` API key | Create an API key via `POST /maas-api/v1/api-keys` with an OCP Bearer token |
 | `403 Forbidden` on model calls | User's group not in `MaaSAuthPolicy.spec.subjects` | Add the group to the `MaaSAuthPolicy` and verify `MaaSSubscription` includes the model |
@@ -1635,7 +1677,7 @@ The inference chart creates it automatically when `maas.enabled=true`. Re-apply 
 starting from a clean slate (e.g. after the Section 12 full reset):
 
 ```bash
-helm template gitops/instance/llm-d/inference --name-template inference \
+helm template inference gitops/instance/llm-d/inference \
   -n llm-d-demo \
   -f gitops/instance/llm-d/inference/qwen3-8b-values.yaml \
   --set maas.enabled=true \

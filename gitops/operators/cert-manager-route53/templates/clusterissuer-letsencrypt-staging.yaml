@@ -20,6 +20,9 @@ spec:
             name: aws-creds
             key: aws_access_key_id
           region: "{{ .Values.route53.region }}"
+          {{- if .Values.route53.hostedZoneID }}
+          hostedZoneID: "{{ .Values.route53.hostedZoneID }}"
+          {{- end }}
           secretAccessKeySecretRef:
             name: aws-creds
             key: aws_secret_access_key

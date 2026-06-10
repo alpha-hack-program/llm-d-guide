@@ -1,7 +1,28 @@
 # Default values for cert-manager-route53.
+#
+# CRITICAL: clusterDomain must be the cluster BASE DOMAIN (from dns.config/cluster spec.baseDomain),
+# NOT the apps ingress domain OR a parent public domain. The chart generates:
+#   - API cert: api.<clusterDomain>
+#   - Ingress cert: apps.<clusterDomain> + *.apps.<clusterDomain>
+#
+# VALIDATION: Run ./scripts/validate-cluster-domain.sh to ensure correct extraction.
+# The script validates that apps domain == apps.<clusterDomain> (works for any cluster).
+#
+# The value MUST match what the cluster has in dns.config/cluster .spec.baseDomain
+#
+# Example: If your cluster has baseDomain=mycluster.example.com and apps=apps.mycluster.example.com:
+#   ✅ CORRECT:   clusterDomain: mycluster.example.com (matches cluster's baseDomain)
+#   ❌ WRONG:     clusterDomain: example.com (doesn't match - would expect apps.example.com)
+#   ❌ WRONG:     clusterDomain: apps.mycluster.example.com (this is the apps domain, not base)
+#
+# The validation script checks: does apps.<clusterDomain> match the cluster's actual apps domain?
+#
+# PREREQUISITE (cloud=aws): The Route53 hosted zone for the PARENT domain must be accessible
+# via the cluster's AWS credentials (e.g., example.com zone must exist for mycluster.example.com).
 
 etcdEncryption:
   enabled: false
 
 route53:
-  region: eu-west-1
+  region: eu-west-1  # AWS region for the Route53 hosted zone (set via --set route53.region=...)
+  hostedZoneID: ""   # (Optional) Explicit Route53 hosted zone ID. Required for private zones or when auto-discovery fails.

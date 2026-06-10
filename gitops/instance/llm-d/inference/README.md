@@ -16,7 +16,7 @@ Deploys a `LLMInferenceService` (llm-d / RHOAI 3.4) via Helm. Supports CPU and G
 ### facebook/opt-125m — CPU node, registered in MaaS (RHOAI 3.4)
 
 ```bash
-helm template . --name-template opt-125m --namespace llm-d-demo \
+helm template opt-125m . --namespace llm-d-demo \
   --set deploymentType=intelligent-inference \
   --set serviceName=opt-125m \
   --set storage.type=hf \
@@ -69,7 +69,7 @@ maas:
 ```
 
 ```bash
-helm template . --name-template opt-125m -f opt-125m.yaml | oc apply -n llm-d-demo -f -
+helm template opt-125m . -f opt-125m.yaml | oc apply -n llm-d-demo -f -
 ```
 
 > After applying, create a `MaaSModelRef` in `llm-d-demo` and add the model to a
@@ -82,7 +82,7 @@ helm template . --name-template opt-125m -f opt-125m.yaml | oc apply -n llm-d-de
 The live instance values are in [`qwen3-8b-values.yaml`](qwen3-8b-values.yaml). Apply with:
 
 ```bash
-helm template . --name-template inference -n llm-d-demo \
+helm template inference . -n llm-d-demo \
   -f qwen3-8b-values.yaml \
   | oc apply -n llm-d-demo -f -
 ```
