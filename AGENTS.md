@@ -696,10 +696,79 @@ oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
 
 5. **Bootstrap subscription namespace** — `models-as-a-service` namespace + `default-tenant` CR (name is exact):
    ```bash
+   # Create namespace
    oc create namespace models-as-a-service --dry-run=client -o yaml | oc apply -f -
+   
+   # Create Tenant CR (global MaaS configuration object)
+   # The Tenant controls:
+   #   - API key settings (maxExpirationDays: max lifetime for generated keys)
+   #   - Gateway reference (which Gateway to use for model routing)
+   #   - Optional: external OIDC, telemetry config
+   # The maas-api pod is hardcoded to look for "default-tenant" in models-as-a-service namespace
+   cat <<'EOF' | oc apply -f -
+   apiVersion: maas.opendatahub.io/v1alpha1
+   kind: Tenant
+   metadata:
+     name: default-tenant              # MUST be exactly "default-tenant"
+     namespace: models-as-a-service
+   spec:
+     apiKeys:
+       maxExpirationDays: 90           # Max API key lifetime (adjust for your security policy)
+     gatewayRef:
+       name: maas-default-gateway      # Which Gateway to use for model routing
+       namespace: openshift-ingress
+   EOF
    ```
 
-6. **Register models** — create `MaaSModelRef`, `MaaSSubscription`, `MaaSAuthPolicy` in `models-as-a-service` (see README §9.2 Step 7 for detailed examples).
+6. **Register models** — create `MaaSModelRef`, `MaaSSubscription`, `MaaSAuthPolicy` in `models-as-a-service`:
+   ```bash
+   # The MaaSModelRef is created automatically when maas.enabled=true in the inference chart.
+   # Verify it exists:
+   oc get maasmodelref -n <model-namespace>
+   
+   # Create MaaSSubscription (token rate limits per model, per group)
+   cat <<'EOF' | oc apply -f -
+   apiVersion: maas.opendatahub.io/v1alpha1
+   kind: MaaSSubscription
+   metadata:
+     name: default-subscription
+     namespace: models-as-a-service
+   spec:
+     owner:
+       groups:
+       - name: system:authenticated    # MUST be an object with 'name' field, not a bare string
+     modelRefs:
+     - name: qwen3-8b-maas             # MaaSModelRef name (not LLMInferenceService name)
+       namespace: llm-d-demo
+       tokenRateLimits:                # REQUIRED field, per-model
+       - window: 24h                   # Window: s, m, h (NOT d - use 24h instead)
+         limit: 1000                   # Token count limit for this window
+   EOF
+   
+   # Create MaaSAuthPolicy (grants groups access to models)
+   cat <<'EOF' | oc apply -f -
+   apiVersion: maas.opendatahub.io/v1alpha1
+   kind: MaaSAuthPolicy
+   metadata:
+     name: default-auth-policy
+     namespace: models-as-a-service
+   spec:
+     subjects:
+       groups:
+       - name: system:authenticated    # MUST match subscription owner groups
+     modelRefs:
+     - name: qwen3-8b-maas             # MUST match subscription modelRefs
+       namespace: llm-d-demo
+   EOF
+   ```
+   
+   **Critical schema notes:**
+   - `owner.groups` is a **list of objects** with `name` field, NOT a list of strings
+   - `tokenRateLimits` is **required on each modelRef**, with `window` and `limit` fields
+   - `window` units: `s`, `m`, `h` only — `d` is not supported, use `24h`
+   - `subjects.groups` in MaaSAuthPolicy must match `owner.groups` in MaaSSubscription
+   
+   See README §9.2 Step 7 for multi-tier examples with different limits per group.
 
 7. **Enable dashboard flags** — all four must be `true`:
    ```bash
@@ -803,13 +872,41 @@ Steps in order:
 
 Verify: `oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress`
 
-### Token rate limiting — rules
+### Token rate limiting — rules and schema
 
+**Rules:**
 - Window units: `s`, `m`, `h` only — `d` is not supported, use `24h`
 - Multiple windows per model are supported (e.g. burst + daily)
 - Different limits per group → separate `MaaSSubscription` objects
 - A user in multiple subscriptions selects one via the `x-maas-subscription` request header
 - The maas-controller reconciles `TokenRateLimitPolicy` immediately on `MaaSSubscription` change
+
+**Correct schema:**
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: example-subscription
+  namespace: models-as-a-service
+spec:
+  owner:
+    groups:
+    - name: my-group          # Object with 'name' field, NOT bare string
+  modelRefs:
+  - name: model-name
+    namespace: model-namespace
+    tokenRateLimits:          # REQUIRED field (list of window/limit pairs)
+    - window: 1h              # Burst limit
+      limit: 100
+    - window: 24h             # Daily limit
+      limit: 1000
+```
+
+**Common errors:**
+- ❌ `groups: ["my-group"]` → ✅ `groups: [{name: "my-group"}]`
+- ❌ `tokenRateLimitPolicy.daily: 1000` → ✅ `tokenRateLimits: [{window: "24h", limit: 1000}]`
+- ❌ `window: 1d` → ✅ `window: 24h` (days not supported)
+- ❌ Missing `tokenRateLimits` → API rejects with "Required value"
 
 ### Token rate limiting does not support streaming requests
 

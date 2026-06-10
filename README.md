@@ -1392,17 +1392,24 @@ MaaS 3.4 uses `Tenant`, `MaaSModelRef`, `MaaSSubscription`, and `MaaSAuthPolicy`
 oc create namespace models-as-a-service
 
 # 5b. Create the Tenant CR — must be named exactly "default-tenant"
+# The Tenant CR is the global MaaS configuration object (singleton per cluster).
+# It controls:
+#   - API key settings (maxExpirationDays: max lifetime for generated keys)
+#   - Gateway reference (which Gateway to use for model routing)
+#   - Optional: external OIDC, telemetry config
+# The maas-api pod is hardcoded to look for a Tenant named "default-tenant"
+# in the models-as-a-service namespace.
 cat <<'EOF' | oc apply -f -
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: Tenant
 metadata:
-  name: default-tenant
+  name: default-tenant              # MUST be exactly "default-tenant"
   namespace: models-as-a-service
 spec:
   apiKeys:
-    maxExpirationDays: 90
+    maxExpirationDays: 90           # Max API key lifetime (adjust for your security policy)
   gatewayRef:
-    name: maas-default-gateway
+    name: maas-default-gateway      # Which Gateway to use for model routing
     namespace: openshift-ingress
 EOF
 
