@@ -1,0 +1,131 @@
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: llm-d-external-models
+  namespace: redhat-ods-monitoring
+  labels:
+    app: llm-d
+    app.kubernetes.io/part-of: dashboard
+    app.opendatahub.io/dashboard: "true"
+spec:
+  config:
+    display:
+      name: "MaaS External Models"
+      description: "Rate limiting and authorization metrics for ExternalModel endpoints (excludes LLMInferenceService)"
+    duration: 1h
+    refreshInterval: 30s
+    layouts:
+    - kind: Grid
+      spec:
+        display:
+          title: "Request & Token Rates"
+        items:
+        - content:
+            $ref: '#/spec/panels/authorizedCalls'
+          height: 8
+          width: 12
+          x: 0
+          y: 0
+        - content:
+            $ref: '#/spec/panels/tokenUsage'
+          height: 8
+          width: 12
+          x: 12
+          y: 0
+    - kind: Grid
+      spec:
+        display:
+          title: "Rate Limiting & Health"
+        items:
+        - content:
+            $ref: '#/spec/panels/limitedCalls'
+          height: 8
+          width: 12
+          x: 0
+          y: 0
+        - content:
+            $ref: '#/spec/panels/limitadorUp'
+          height: 8
+          width: 12
+          x: 12
+          y: 0
+    panels:
+      authorizedCalls:
+        kind: Panel
+        spec:
+          display:
+            name: "Request Rate (req/s)"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: 'sum(rate(authorized_calls{limitador_namespace=~"maas-demo/.*",limitador_namespace!~".*-kserve-route"}[5m])) by (limitador_namespace)'
+                  seriesNameFormat: '{{limitador_namespace}}'
+
+      tokenUsage:
+        kind: Panel
+        spec:
+          display:
+            name: "Token Rate (tok/s)"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: 'sum(rate(authorized_hits{limitador_namespace=~"maas-demo/.*",limitador_namespace!~".*-kserve-route"}[5m])) by (limitador_namespace, model)'
+                  seriesNameFormat: '{{model}} ({{limitador_namespace}})'
+
+      limitedCalls:
+        kind: Panel
+        spec:
+          display:
+            name: "Rate Limited Rate (429/s)"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: 'sum(rate(limited_calls{limitador_namespace=~"maas-demo/.*",limitador_namespace!~".*-kserve-route"}[5m])) by (limitador_namespace, user)'
+                  seriesNameFormat: '{{user}} - {{limitador_namespace}}'
+
+      limitadorUp:
+        kind: Panel
+        spec:
+          display:
+            name: "Limitador Status"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: 'limitador_up'
+                  seriesNameFormat: 'Limitador'

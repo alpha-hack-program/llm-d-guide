@@ -1027,18 +1027,40 @@ curl -s -X POST https://${INFERENCE_URL}/${PROJECT}/qwen3-8b/v1/chat/completions
   }' | jq '.choices[0].message.content'
 ```
 
-## Step 6: Deploy Monitoring (Optional)
+## Step 6: Deploy Monitoring
 
-Deploy Prometheus and Grafana for performance monitoring (TTFT, inter-token latency, KV cache hit rates, GPU utilization):
+**Prerequisites:**
+- User Workload Monitoring enabled (MANDATORY for metrics collection)
+- Cluster Observability Operator installed (MANDATORY for dashboards)
 
 ```bash
-until oc apply -k gitops/instance/llm-d-monitoring; do : ; done
+# Enable User Workload Monitoring (if not already enabled)
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+EOF
 
-# Get Grafana URL
-oc get route grafana -n llm-d-monitoring -o jsonpath='{.spec.host}'
+# Wait for prometheus-user-workload pods (~5 min)
+oc get pods -n openshift-user-workload-monitoring -w
+
+# Install Cluster Observability Operator
+oc apply -k gitops/operators/cluster-observability-operator
+
+# Deploy Perses dashboard
+oc apply -f gitops/instance/llm-d-observability/perses-dashboard-intelligent-inference.yaml
 ```
 
-Access Grafana with default credentials: `admin` / `admin`
+**Access dashboard:**
+OpenShift Console → **Observe** → **Dashboards** (Perses tab) → Select **"llm-d Intelligent Inference"**
+
+For complete setup, troubleshooting, and metrics reference, see:  
+[gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md](gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md)
 
 ## Step 7: Verify Intelligent Routing (Recommended)
 
@@ -2142,11 +2164,35 @@ Verify the Gateway listener has `llm-d-demo` (or your namespace) in its allowed 
 oc get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[0].allowedRoutes}' | jq .
 ```
 
+### Critical Requirements for ExternalModel
+
+Before creating an ExternalModel, understand these **mandatory** constraints:
+
+1. **MaaSModelRef name MUST match ExternalModel name exactly.**
+
+   Unlike `LLMInferenceService` where the MaaSModelRef can have a different name, for ExternalModel the names must be identical. This is either intentional design or a known constraint - either way, it's mandatory for the system to work correctly.
+
+   ```yaml
+   # ExternalModel name
+   metadata:
+     name: qwen3-14b              # ← This name
+   
+   # MaaSModelRef MUST have the exact same name
+   metadata:
+     name: qwen3-14b              # ← MUST match
+   ```
+
+2. **Credential secret requires the label `inference.networking.k8s.io/bbr-managed: "true"`.**
+
+   The `payload-processing` ext_proc service uses this label as a predicate — secrets without it are silently ignored and the credential store is never populated, causing every call to fail with `"provider 'openai' credentials not found"`.
+
+3. **MaaSModelRef must be created manually.**
+
+   Unlike `LLMInferenceService` which auto-creates the MaaSModelRef when `maas.enabled=true`, ExternalModel requires manual creation of the MaaSModelRef with the matching name.
+
 ### 11.2 Create the ExternalModel and credentials
 
 Replace `<LITELLM_ENDPOINT>` with the hostname (no `https://`) of your OpenAI-compatible endpoint, and `<LITELLM_API_KEY>` with the API key that endpoint expects.
-
-> **Critical:** The Secret **must** carry the label `inference.networking.k8s.io/bbr-managed: "true"`. The `payload-processing` ext_proc service uses this label as a predicate — secrets without it are silently ignored and the credential store is never populated, causing every call to fail with `"provider 'openai' credentials not found"`.
 
 ```bash
 cat <<EOF | oc apply -f -
@@ -2176,7 +2222,7 @@ spec:
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
-  name: qwen3-14b-model
+  name: qwen3-14b
   namespace: ${MODEL_NAMESPACE}
 spec:
   modelRef:
@@ -2188,7 +2234,7 @@ EOF
 Wait for the `MaaSModelRef` to become Ready:
 
 ```bash
-oc get maasmodelref qwen3-14b-model -n ${MODEL_NAMESPACE} -w
+oc get maasmodelref qwen3-14b -n ${MODEL_NAMESPACE} -w
 # Expected: Ready: True (the maas-controller creates an HTTPRoute and wires the gateway)
 ```
 
@@ -2213,7 +2259,7 @@ spec:
     groups:
       - name: premium-users
   modelRefs:
-    - name: qwen3-14b-model
+    - name: qwen3-14b
       namespace: ${MODEL_NAMESPACE}
       tokenRateLimits:
         - limit: 1000
@@ -2229,7 +2275,7 @@ spec:
     groups:
       - name: premium-users
   modelRefs:
-    - name: qwen3-14b-model
+    - name: qwen3-14b
       namespace: ${MODEL_NAMESPACE}
 EOF
 ```
@@ -2238,7 +2284,7 @@ Verify the `maas-controller` translated the subscription into a Kuadrant policy:
 
 ```bash
 oc get tokenratelimitpolicy -n ${MODEL_NAMESPACE}
-# Expected: maas-trlp-qwen3-14b-model   Accepted=True  Enforced=True
+# Expected: maas-trlp-qwen3-14b   Accepted=True  Enforced=True
 ```
 
 ### 11.4 Ensure the `premium-users` group and `alice` exist
@@ -2329,13 +2375,30 @@ for i in $(seq 1 20); do
 done
 ```
 
-### 11.6 Cleanup
+### 11.6 Monitoring (Optional)
+
+ExternalModels expose rate limiting metrics via Limitador (not vLLM). A Perses dashboard shows request rate, token usage, and rate limiting.
+
+**Deploy:**
+
+```bash
+# Enable Prometheus scraping + deploy dashboard
+oc label namespace kuadrant-system openshift.io/cluster-monitoring=true --overwrite
+oc apply -f gitops/instance/llm-d-observability/limitador-servicemonitor.yaml
+oc apply -f gitops/instance/llm-d-observability/perses-dashboard-external-models.yaml
+```
+
+**Access:** Console → **Observe** → **Dashboards** → **"MaaS External Models"**
+
+See [`EXTERNAL-MONITORING-INTEGRATION.md`](gitops/instance/llm-d-observability/EXTERNAL-MONITORING-INTEGRATION.md) for technical details.
+
+### 11.7 Cleanup
 
 ```bash
 # Delete MaaS CRs
 oc delete maasauthpolicy external-premium-auth-policy -n models-as-a-service 2>/dev/null || true
 oc delete maassubscription external-premium-subscription -n models-as-a-service 2>/dev/null || true
-oc delete maasmodelref qwen3-14b-model -n ${MODEL_NAMESPACE} 2>/dev/null || true
+oc delete maasmodelref qwen3-14b -n ${MODEL_NAMESPACE} 2>/dev/null || true
 oc delete externalmodel qwen3-14b -n ${MODEL_NAMESPACE} 2>/dev/null || true
 oc delete secret litellm-credentials -n ${MODEL_NAMESPACE} 2>/dev/null || true
 # Also removes the HTTPRoute created by the maas-controller:

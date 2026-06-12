@@ -1,0 +1,241 @@
+apiVersion: perses.dev/v1alpha2
+kind: PersesDashboard
+metadata:
+  name: llm-d-intelligent-inference
+  namespace: redhat-ods-monitoring
+  labels:
+    app: llm-d
+    app.kubernetes.io/part-of: dashboard
+    app.opendatahub.io/dashboard: "true"
+spec:
+  config:
+    display:
+      name: "llm-d Intelligent Inference (Prefix Caching + EPP)"
+      description: "Well-lit path specific metrics for Intelligent Inference with cache-aware routing"
+    duration: 1h
+    refreshInterval: 30s
+    layouts:
+    - kind: Grid
+      spec:
+        display:
+          title: "Cache Effectiveness (Primary Success Metrics)"
+        items:
+        - content:
+            $ref: '#/spec/panels/cacheHitRate'
+          height: 6
+          width: 12
+          x: 0
+          y: 0
+        - content:
+            $ref: '#/spec/panels/cachedTokensSaved'
+          height: 6
+          width: 12
+          x: 12
+          y: 0
+        - content:
+            $ref: '#/spec/panels/ttftP95'
+          height: 6
+          width: 8
+          x: 0
+          y: 6
+        - content:
+            $ref: '#/spec/panels/ttftP99'
+          height: 6
+          width: 8
+          x: 8
+          y: 6
+        - content:
+            $ref: '#/spec/panels/kvCacheUsage'
+          height: 6
+          width: 8
+          x: 16
+          y: 6
+        - content:
+            $ref: '#/spec/panels/queueDepth'
+          height: 6
+          width: 12
+          x: 0
+          y: 12
+        - content:
+            $ref: '#/spec/panels/requestRate'
+          height: 6
+          width: 12
+          x: 12
+          y: 12
+    panels:
+      cacheHitRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Prefix Cache Hit Rate % (North Star Metric)"
+            description: "Token-level cache hit rate - target > 80% for multi-turn workloads"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    sum(rate(kserve_vllm:prefix_cache_hits_total{namespace="maas-demo"}[5m]))
+                    /
+                    sum(rate(kserve_vllm:prefix_cache_queries_total{namespace="maas-demo"}[5m]))
+                    * 100
+                  seriesNameFormat: "Cache Hit Rate %"
+
+      cachedTokensSaved:
+        kind: Panel
+        spec:
+          display:
+            name: "Cached Tokens Saved (Business Value)"
+            description: "Tokens NOT recomputed due to cache - GPU hours saved"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    sum(rate(kserve_vllm:prompt_tokens_cached_total{namespace="maas-demo"}[5m])) * 60
+                  seriesNameFormat: "Tokens/min saved"
+
+      ttftP95:
+        kind: Panel
+        spec:
+          display:
+            name: "TTFT P95"
+            description: "P95 Time To First Token - with good caching, should be 50-80% faster"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    histogram_quantile(0.95, sum by (le, model_name) (
+                      rate(kserve_vllm:time_to_first_token_seconds_bucket{namespace="maas-demo"}[5m])
+                    ))
+                  seriesNameFormat: "{{model_name}} P95"
+
+      ttftP99:
+        kind: Panel
+        spec:
+          display:
+            name: "TTFT P99 (Tail Latency)"
+            description: "P99 Time To First Token - target < 1s"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    histogram_quantile(0.99, sum by (le, model_name) (
+                      rate(kserve_vllm:time_to_first_token_seconds_bucket{namespace="maas-demo"}[5m])
+                    ))
+                  seriesNameFormat: "{{model_name}} P99"
+
+      kvCacheUsage:
+        kind: Panel
+        spec:
+          display:
+            name: "KV Cache Utilization %"
+            description: "Alert when > 90% sustained - scale up or reduce max_model_len"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    kserve_vllm:kv_cache_usage_perc{namespace="maas-demo"}
+                  seriesNameFormat: "{{model_name}}"
+
+      queueDepth:
+        kind: Panel
+        spec:
+          display:
+            name: "Queue Depth (Waiting + Running)"
+            description: "Alert when waiting > 10 sustained. With good caching, TTFT stays low even with queue"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    kserve_vllm:num_requests_waiting{namespace="maas-demo"}
+                  seriesNameFormat: "Waiting - {{model_name}}"
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    kserve_vllm:num_requests_running{namespace="maas-demo"}
+                  seriesNameFormat: "Running - {{model_name}}"
+
+      requestRate:
+        kind: Panel
+        spec:
+          display:
+            name: "Request Rate (Success + Failure)"
+            description: "Successful vs failed requests per second - target > 99.9% success"
+          plugin:
+            kind: TimeSeriesChart
+            spec:
+              legend:
+                mode: list
+                position: bottom
+          queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    sum(rate(kserve_vllm:request_success_total{namespace="maas-demo"}[5m]))
+                  seriesNameFormat: "Success"
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: |
+                    sum(rate(kserve_vllm:request_failure_total{namespace="maas-demo"}[5m]))
+                  seriesNameFormat: "Failure"

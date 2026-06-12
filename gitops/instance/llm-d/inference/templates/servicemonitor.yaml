@@ -1,0 +1,71 @@
+{{- if .Values.monitoring.enabled }}
+---
+# ServiceMonitor for vLLM workload metrics (main inference pods)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Values.serviceName }}-workload-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: llm-d
+    app.kubernetes.io/name: {{ .Values.serviceName }}
+    app.kubernetes.io/part-of: llminferenceservice
+    llm-d.ai/well-lit-path: {{ .Values.deploymentType }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.serviceName }}
+      app.kubernetes.io/component: llminferenceservice-workload
+  endpoints:
+  - port: https
+    interval: {{ .Values.monitoring.serviceMonitor.interval }}
+    scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+    path: /metrics
+    scheme: https
+    tlsConfig:
+      insecureSkipVerify: true
+    # Propagate well-lit path label from Service to metrics
+    # This allows dashboard filtering: {well_lit_path="intelligent-inference"}
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_service_label_llm_d_ai_well_lit_path]
+      targetLabel: well_lit_path
+      action: replace
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+
+---
+# ServiceMonitor for EPP (Endpoint Picker) scheduler metrics
+# Only created for intelligent-inference deploymentType (EPP only exists there)
+{{- if eq .Values.deploymentType "intelligent-inference" }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Values.serviceName }}-epp-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: llm-d
+    app.kubernetes.io/name: {{ .Values.serviceName }}
+    app.kubernetes.io/component: epp-scheduler
+    llm-d.ai/well-lit-path: {{ .Values.deploymentType }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.serviceName }}
+      app.kubernetes.io/component: llminferenceservice-router-scheduler
+  endpoints:
+  - port: metrics
+    interval: {{ .Values.monitoring.serviceMonitor.interval }}
+    scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+    path: /metrics
+    scheme: http
+    # Propagate well-lit path label from Service to metrics
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_service_label_llm_d_ai_well_lit_path]
+      targetLabel: well_lit_path
+      action: replace
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

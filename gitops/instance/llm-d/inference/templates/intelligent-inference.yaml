@@ -33,7 +33,7 @@
   {{- $enableAuth = true }}
 {{- end }}
 
-{{- /* ── Env vars: CPU defaults + vllmAdditionalArgs + user extras ────────── */}}
+{{- /* ── Env vars: CPU defaults + vLLM args (from helper) + user extras ───── */}}
 {{- $envVars := .Values.env | default list }}
 {{- if not $isGPU }}
   {{- if .Values.cpu.kvCacheSpaceGiB }}
@@ -43,8 +43,9 @@
     {{- $envVars = prepend $envVars (dict "name" "VLLM_SKIP_WARMUP" "value" "true") }}
   {{- end }}
 {{- end }}
-{{- if .Values.vllmAdditionalArgs }}
-  {{- $envVars = append $envVars (dict "name" "VLLM_ADDITIONAL_ARGS" "value" .Values.vllmAdditionalArgs) }}
+{{- $vllmArgs := include "inference.vllmArgs" . | trim }}
+{{- if $vllmArgs }}
+  {{- $envVars = append $envVars (dict "name" "VLLM_ADDITIONAL_ARGS" "value" $vllmArgs) }}
 {{- end }}
 
 ---
@@ -67,6 +68,7 @@ metadata:
     opendatahub.io/dashboard: "true"
     opendatahub.io/genai-asset: "true"
     monitoring.opendatahub.io/scrape: "true"
+    llm-d.ai/well-lit-path: {{ .Values.deploymentType }}
 spec:
   replicas: {{ .Values.replicas }}
   model:

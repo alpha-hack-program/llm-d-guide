@@ -9,3 +9,5 @@ old
 .claude/worktrees/
 *.scratch/
 resume.claude.*
+archive/
+legacy*/

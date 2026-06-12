@@ -512,24 +512,34 @@ oc get csv -n openshift-operators -w | grep -E "pipelines"
 
 ## Phase 4 — Monitoring Stack
 
-**Goal:** Install Tempo (tracing), OpenTelemetry (collector), and Grafana (dashboards).
-
-**Install order:**
-1. Tempo Operator (`gitops/operators/tempo-operator`)
-2. OpenTelemetry Operator (`gitops/operators/opentelemetry-operator`)
-3. Grafana Operator (`gitops/operators/grafana-operator`, optional dashboards)
+**Goal:** Install COO for llm-d metrics dashboards.
 
 ```bash
-# README section 3.3 monitoring substeps — apply in order; watch CSVs until Succeeded
-oc apply -k gitops/operators/tempo-operator
-oc apply -k gitops/operators/opentelemetry-operator
-oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
-oc apply -k gitops/operators/grafana-operator
+# Enable User Workload Monitoring (MANDATORY)
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+EOF
+
+# Install Cluster Observability Operator
+oc apply -k gitops/operators/cluster-observability-operator
+
+# Deploy Perses dashboard
+oc apply -f gitops/instance/llm-d-observability/perses-dashboard-intelligent-inference.yaml
 ```
 
-**Human gate:** Optional. Confirm Grafana route is accessible if you want dashboards during llm-d testing.
+**Access:** OpenShift Console → **Observe** → **Dashboards** (Perses tab)
 
-**End of Phase 4:** Stop here and report monitoring stack status to the user. Show the CSV status for all three operators (Tempo, OpenTelemetry, Grafana). Wait for confirmation before proceeding to Phase 5.
+For complete setup and troubleshooting:  
+[gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md](gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md)
+
+**End of Phase 4:** Stop here and report monitoring stack status to the user. Verify COO CSV is Succeeded. Wait for confirmation before proceeding to Phase 5.
 
 ---
 
@@ -553,6 +563,16 @@ oc get pods -n redhat-ods-applications \
 
 # All operators healthy
 ./scripts/check-operators.sh
+
+# User Workload Monitoring enabled (MANDATORY for metrics)
+oc get configmap cluster-monitoring-config -n openshift-monitoring \
+  -o jsonpath='{.data.config\.yaml}' | grep enableUserWorkload
+# Expected: enableUserWorkload: true
+# If not enabled, STOP and enable it (see README §8 Step 6.2) before proceeding
+
+# Prometheus user-workload pods running
+oc get pods -n openshift-user-workload-monitoring | grep prometheus-user-workload
+# Expected: prometheus-user-workload-0 and prometheus-user-workload-1 Running
 ```
 
 **Steps:** Follow README **Quick Start** (Steps 1–6: Gateway, namespace, LLMInferenceService, verify, curl tests, optional monitoring). The assistant should:
@@ -605,7 +625,78 @@ Run the verification script to confirm EPP scheduler is making routing decisions
 
 For detailed explanation, architecture diagrams, troubleshooting, and multi-replica testing, see: [llm-d Intelligent Routing Verification Guide](LLMD-INTELLIGENT-ROUTING-VERIFICATION.md)
 
-**End of Phase 5:** Stop here and report the llm-d Quick Start test results to the user. Show the curl test output (chat completion response) and optionally the verification script results. If the model returns a coherent answer and intelligent routing is verified, the deployment is successful. Wait for confirmation before proceeding to Phase 6.
+---
+
+**Verify monitoring integration (MANDATORY if User Workload Monitoring is enabled):**
+
+The inference chart automatically creates ServiceMonitors. Verify they are scraping metrics:
+
+```bash
+# 1. Check ServiceMonitors were created
+oc get servicemonitor -n <namespace> -l app.kubernetes.io/name=<serviceName>
+# Expected for intelligent-inference: 2 ServiceMonitors (workload + EPP)
+# Expected for P/D disaggregation: 1 ServiceMonitor (workload only)
+
+# 2. Verify Prometheus targets are healthy
+oc port-forward -n openshift-user-workload-monitoring prometheus-user-workload-0 9090:9090 &
+# Open http://localhost:9090/targets and search for your namespace
+# Expected: State: UP for all targets
+
+# 3. Send test traffic to generate metrics
+INFERENCE_URL=$(oc get llminferenceservice <serviceName> -n <namespace> -o jsonpath='{.status.url}')
+SYSTEM_PROMPT="You are a helpful AI assistant specialized in OpenShift and Kubernetes."
+
+for i in {1..10}; do
+  curl -sk -X POST "${INFERENCE_URL}/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"model\": \"<model-name>\",
+      \"messages\": [
+        {\"role\": \"system\", \"content\": \"${SYSTEM_PROMPT}\"},
+        {\"role\": \"user\", \"content\": \"Question ${i}: What is a pod?\"}
+      ],
+      \"max_tokens\": 50
+    }"
+  sleep 1
+done
+
+# 4. Wait for Prometheus to scrape (30s)
+sleep 30
+
+# 5. Query cache hit rate
+oc exec -n openshift-user-workload-monitoring prometheus-user-workload-0 -- \
+  curl -s 'http://localhost:9090/api/v1/query?query=vllm:prefix_cache_hits_total/vllm:prefix_cache_queries_total*100' | \
+  jq -r '.data.result[] | select(.metric.namespace=="<namespace>") | "Cache Hit Rate: \(.value[1] | tonumber | floor)%"'
+# Expected for intelligent-inference: 50-90% cache hit rate
+```
+
+**What this proves:**
+- ✅ ServiceMonitors created automatically with model deployment
+- ✅ Prometheus scraping vLLM metrics
+- ✅ Prefix caching enabled and working (hit rate > 0%)
+- ✅ Metrics pipeline functional
+
+**Troubleshooting:**
+- **0% cache hit rate:** Verify prefix caching is enabled in the pod:
+  ```bash
+  POD=$(oc get pods -n <namespace> -l llm-d.ai/role=both -o jsonpath='{.items[0].metadata.name}')
+  oc exec -n <namespace> $POD -c main -- ps aux | grep "enable-prefix-caching"
+  # Expected: --enable-prefix-caching in the command line
+  ```
+  If missing, the pod was deployed with an old chart version. Re-deploy with the current chart (prefix caching is auto-enabled for intelligent-inference).
+
+- **No metrics in Prometheus:** Check User Workload Monitoring is enabled (see pre-flight checks above).
+
+For complete monitoring setup and troubleshooting, see: [MONITORING-INTEGRATION.md](MONITORING-INTEGRATION.md)
+
+---
+
+**End of Phase 5:** Stop here and report the llm-d Quick Start test results to the user. Show:
+1. ✅ Chat completion response (model is responding)
+2. ✅ Intelligent routing verification (EPP + prefix cache working)
+3. ✅ Monitoring verification (ServiceMonitors + metrics flowing)
+
+Wait for confirmation before proceeding to Phase 6.
 
 ---
 
@@ -1062,21 +1153,82 @@ An `ExternalModel` CR points the MaaS gateway at any OpenAI-compatible endpoint.
 `payload-processing` ext_proc service (pod in `openshift-ingress`) has two controllers: one for
 `ExternalModel` CRs (routing/model-store) and one for `Secret` CRs (credential-store).
 
-**The secret controller requires the label `inference.networking.k8s.io/bbr-managed: "true"`.**
+### Critical Requirements
+
+**1. MaaSModelRef name MUST match ExternalModel name exactly.**
+
+This is a mandatory constraint. Unlike `LLMInferenceService` where the MaaSModelRef can have a
+different name, for ExternalModel the names must be identical:
+
+```yaml
+# ExternalModel
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: ExternalModel
+metadata:
+  name: qwen3-14b              # ← This name
+  namespace: maas-demo
+spec:
+  credentialRef:
+    name: litellm-credentials
+  endpoint: litellm-prod.apps.maas.redhatworkshops.io
+  provider: openai
+  targetModel: qwen3-14b
+
+---
+# MaaSModelRef MUST have the same name
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: qwen3-14b              # ← MUST match ExternalModel name exactly
+  namespace: maas-demo
+spec:
+  modelRef:
+    kind: ExternalModel
+    name: qwen3-14b
+```
+
+**2. Credential secret requires the label `inference.networking.k8s.io/bbr-managed: "true"`.**
+
 Secrets without this label are silently ignored — the credential store is never populated and every
 request fails with `"provider 'openai' credentials not found"`.
 
 ```yaml
+apiVersion: v1
+kind: Secret
 metadata:
+  name: litellm-credentials
+  namespace: maas-demo
   labels:
-    inference.networking.k8s.io/bbr-managed: "true"
+    inference.networking.k8s.io/bbr-managed: "true"  # ← REQUIRED
+type: Opaque
+data:
+  OPENAI_API_KEY: <base64-encoded-api-key>
 ```
 
-**Path format:** The MaaS gateway path for an ExternalModel is `/{namespace}/{ExternalModel.metadata.name}/v1/...`
-(not the MaaSModelRef name). Example: `https://maas.<domain>/llm-d-demo/qwen3-14b/v1/chat/completions`.
+**3. MaaSModelRef must be created manually.**
+
+Unlike `LLMInferenceService` which auto-creates the MaaSModelRef when `maas.enabled=true`,
+ExternalModel requires manual creation of the MaaSModelRef.
+
+**Path format:** The MaaS gateway path for an ExternalModel is `/{namespace}/{ExternalModel.metadata.name}/v1/...`.
+Example: `https://maas.<domain>/maas-demo/qwen3-14b/v1/chat/completions`.
 
 **Only llm-d runtime supports MaaS:** The "Publish as MaaS endpoint" toggle in Advanced settings
 is only available when **Distributed inference with llm-d** is selected as the serving runtime.
+
+### Monitoring ExternalModels
+
+ExternalModels expose metrics via Limitador, not vLLM. Deploy monitoring:
+
+```bash
+oc label namespace kuadrant-system openshift.io/cluster-monitoring=true --overwrite
+oc apply -f gitops/instance/llm-d-observability/limitador-servicemonitor.yaml
+oc apply -f gitops/instance/llm-d-observability/perses-dashboard-external-models.yaml
+```
+
+Dashboard: Console → Observe → Dashboards → "MaaS External Models"
+
+Technical details: `gitops/instance/llm-d-observability/EXTERNAL-MONITORING-INTEGRATION.md`
 
 ---
 

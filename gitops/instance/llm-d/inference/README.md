@@ -244,3 +244,23 @@ Create the secret first:
 ```bash
 oc create secret generic hf-token --from-literal=token=hf_xxxx -n llm-d-demo
 ```
+
+---
+
+## Technical Documentation
+
+For deep-dive technical references, see [docs/](docs/):
+
+- [VLLM-ARGS-STRUCTURED.md](docs/VLLM-ARGS-STRUCTURED.md) — Structured vLLM arguments configuration
+- [WELL-LIT-PATH-LABELS.md](docs/WELL-LIT-PATH-LABELS.md) — Automatic well-lit path labeling
+- [MONITORING.md](docs/MONITORING.md) — ServiceMonitor integration (auto-created)
+- [PREFIX-CACHING-CONFIG.md](docs/PREFIX-CACHING-CONFIG.md) — Prefix caching configuration reference
+- [ENABLE-PREFIX-CACHING.md](docs/ENABLE-PREFIX-CACHING.md) — Prefix caching troubleshooting guide
+
+---
+
+## Related Documentation
+
+- [README.md Step 3](../../../README.md#step-3-deploy-a-model) — Deployment walkthrough
+- [AGENTS.md Phase 5](../../../AGENTS.md#phase-5--llm-d-quick-start) — Deployment with assistant
+- [LLM-D-MONITORING-INTEGRATION.md](../../llm-d-observability/LLM-D-MONITORING-INTEGRATION.md) — Monitoring setup

@@ -1,6 +1,12 @@
 # Deployment type (required; chart fails if not one of these):
 # - intelligent-inference:  single pool with full EPP scheduler (prefix-cache, queue, kv-cache scoring)
 # - pd-disaggregation:     split prefill + decode pools, NixlConnector KV transfer
+#
+# This value is automatically added as a label (llm-d.ai/well-lit-path) to the
+# LLMInferenceService, which enables:
+# - Dashboard filtering by architecture type
+# - Correct metrics interpretation (cache hit rate for intelligent-inference, KV transfer for P/D)
+# - ServiceMonitor label propagation to Prometheus metrics
 deploymentType: intelligent-inference
 
 # When true and deploymentType is intelligent-inference: use minimal scheduler {} and
@@ -80,11 +86,24 @@ cpu:
   kvCacheSpaceGiB: 4  # VLLM_CPU_KVCACHE_SPACE — GiB reserved for KV cache (default ~15 GiB causes OOM on small nodes)
   skipWarmup: true    # VLLM_SKIP_WARMUP — skip Inductor compilation warmup; faster restarts at the cost of first-token latency
 
-# ── vLLM additional arguments ────────────────────────────────────────────────
-# When set, injected as VLLM_ADDITIONAL_ARGS before the env[] list below.
-# Keeps tool-call flags, log suppression, etc. out of the generic env list.
-# Example: "--disable-uvicorn-access-log --enable-auto-tool-choice --tool-call-parser hermes"
-vllmAdditionalArgs: ""
+# ── vLLM configuration ────────────────────────────────────────────────────────
+# Structured vLLM settings: framework-managed flags + user extras
+vllm:
+  # Prefix caching configuration (critical for intelligent-inference)
+  # Modes:
+  #   "auto" (default) - Enabled for intelligent-inference, disabled for P/D
+  #   true             - Always enabled (all deployment types)
+  #   false            - Always disabled (not recommended for intelligent-inference)
+  prefixCaching:
+    enabled: auto
+
+  # User-specific vLLM flags (appended after framework-managed flags)
+  # Example:
+  #   extraArgs:
+  #     - "--disable-uvicorn-access-log"
+  #     - "--enable-auto-tool-choice"
+  #     - "--tool-call-parser=hermes"
+  extraArgs: []
 
 # ── Extra env vars ────────────────────────────────────────────────────────────
 # Appended to the main container after any auto-injected CPU env vars above.
@@ -96,6 +115,21 @@ env: []
 #       secretKeyRef:
 #         name: hf-token
 #         key: token
+
+# ── Monitoring ────────────────────────────────────────────────────────────────
+# When enabled: creates a ServiceMonitor in the same namespace to scrape vLLM metrics.
+# The ServiceMonitor is picked up by OpenShift User Workload Monitoring (Prometheus).
+#
+# IMPORTANT: User Workload Monitoring must be enabled on the cluster:
+#   oc get configmap cluster-monitoring-config -n openshift-monitoring \
+#     -o jsonpath='{.data.config\.yaml}' | grep enableUserWorkload
+#
+# Well-lit path label is automatically propagated from deploymentType to metrics.
+monitoring:
+  enabled: true  # Default: ON (disable for air-gapped or non-monitored environments)
+  serviceMonitor:
+    interval: 30s       # How often to scrape metrics
+    scrapeTimeout: 10s  # Timeout for each scrape
 
 # ── MaaS integration ──────────────────────────────────────────────────────────
 # When enabled: sets enable-auth to true, routes traffic through the MaaS gateway,

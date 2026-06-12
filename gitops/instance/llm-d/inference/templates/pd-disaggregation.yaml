@@ -17,6 +17,8 @@ metadata:
   annotations:
     opendatahub.io/connections: {{ .Values.serviceName }}-connection
   {{- end }}
+  labels:
+    llm-d.ai/well-lit-path: {{ .Values.deploymentType }}
 spec:
   replicas: {{ .Values.replicas }}
   model:
