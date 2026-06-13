@@ -24,6 +24,7 @@
 13. [Appendix C — Reference Links](#appendix-c--reference-links)
 14. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
 15. [11. External Model MaaS Demo (Optional)](#11-external-model-maas-demo-optional)
+16. [AI-Assisted Installation](#ai-assisted-installation)
 
 ---
 
@@ -96,6 +97,7 @@ This repository includes an [`AGENTS.md`](AGENTS.md) file that gives Claude Code
 | 3 | Connectivity Link, Leader Worker Set, RHOAI operator, DataScienceCluster | 20–30 min |
 | 4 | Monitoring stack — Tempo, OpenTelemetry, Grafana | 10 min |
 | 5 | llm-d Quick Start — Gateway, namespace, LLMInferenceService, curl smoke test | 15–20 min |
+| 6 | MaaS — Gateway, Authorino TLS, subscriptions, API key smoke test | 10–15 min |
 
 ### Resuming after an error
 
@@ -165,66 +167,36 @@ You can instead edit `gitops/operators/rhoai/values.yaml` (`olmProfile` or expli
 
 RHOAI 3.4 requires several operators installed **before** creating the DataScienceCluster. Install them via **Operators → OperatorHub** in the web console or via CLI Subscription objects.
 
+> **Step-by-step CLI commands** for each section are in the phase guides:
+> - [Phase 1 — ArgoCD + cert-manager + Let's Encrypt](docs/phases/01-argocd-certs.md)
+> - [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes.md)
+> - [Phase 3 — Core Operators + RHOAI](docs/phases/03-operators-rhoai.md)
+> - [Phase 4 — Monitoring](docs/phases/04-monitoring.md)
+
 > **Note on cert-manager:** The cert-manager Operator for Red Hat OpenShift is recommended for automating TLS certificate lifecycle across RHOAI, llm-d, OpenTelemetry, and Llama Stack. It is not a hard requirement — you can provide manually generated certificates wherever TLS is needed. That said, several components document cert-manager as a dependency in their official guides, making it the path of least resistance for most deployments.
 
 > **Note on Service Mesh:** Do **not** install OpenShift Service Mesh 2.x under any circumstances. It is not supported in RHOAI 3.x and its CRDs conflict with the llm-d gateway component. Service Mesh 3.x is only required if you plan to deploy the **Llama Stack Operator** — it is **not** needed for base RHOAI or llm-d.
 
 ### 3.0 ArgoCD (Red Hat OpenShift GitOps)
 
-```bash
-helm template openshift-gitops ./gitops/operators/openshift-gitops | oc apply -f -
-```
+Optional. Not required if applying manifests directly with `helm template | oc apply`.
 
-Wait for the CSV to reach `Succeeded`:
-
-```bash
-oc get csv -n openshift-gitops-operator --watch
-```
+**CLI commands:** [Phase 1 — ArgoCD + cert-manager](docs/phases/01-argocd-certs.md)
 
 ### 3.1 Cert-Manager Operator and Let's Encrypt Certificate Issuer
 
 > **AWS credential flow (IRSA):** On AWS, the cert-manager chart (`cloud=aws`) creates a `CredentialsRequest` in `openshift-cloud-credential-operator`. The OpenShift Cloud Credential Operator (CCO) reads this request and automatically provisions a scoped IAM credential into an `aws-creds` Secret in the `cert-manager` namespace. The Secret contains `aws_access_key_id` and `aws_secret_access_key` entries tied to a policy that allows only the Route53 actions needed for DNS-01 challenge solving (`route53:GetChange`, `ChangeResourceRecordSets`, `ListResourceRecordSets`, `ListHostedZonesByName`). No manual AWS credential input is required — CCO handles the full lifecycle. Verify the secret was provisioned: `oc get secret aws-creds -n cert-manager`.
 
-#### Installing the operator
-
 The chart deploys the `cert-manager-operator` and `cert-manager` namespaces, the OLM Subscription, the `CertManager` cluster configuration, monitoring RBAC and a `ServiceMonitor`, and (on AWS) a `CredentialsRequest` for Route53 access.
 
-Set `CLOUD` to **aws** when running on AWS, or **none** for bare metal / non-AWS:
+Set `CLOUD` to **aws** when running on AWS, or **none** for bare metal / non-AWS.
 
-```bash
-CLOUD=aws   # or "none" for bare metal / non-AWS
-```
+> **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reaches `Succeeded`. This is expected. Wait for the CSV, then re-run — it applies cleanly on the second pass.
 
-**Option A — CLI:**
+**CLI commands:** [Phase 1 — ArgoCD + cert-manager](docs/phases/01-argocd-certs.md)
 
-```bash
-for i in $(seq 1 60); do
-  if helm template gitops/operators/cert-manager-operator --set cloud=${CLOUD} --name-template cert-manager | oc apply -f -; then
-    break
-  fi
-  [[ $i -eq 60 ]] && { echo "Gave up after 60 attempts"; exit 1; }
-  sleep 5
-done
-
-# Wait for CSV
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
-   -n cert-manager-operator \
-   -l operators.coreos.com/openshift-cert-manager-operator.cert-manager-operator= \
-   --timeout=300s
-```
-
-> **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reaches `Succeeded`. This is expected. Wait for the CSV, then run the same command a second time — it applies cleanly:
-> ```bash
-> # Wait for CSV
-> oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
->   -n cert-manager-operator \
->   -l operators.coreos.com/openshift-cert-manager-operator.cert-manager-operator= \
->   --timeout=300s
-> # Second pass — applies the CertManager CR
-> helm template gitops/operators/cert-manager-operator --set cloud=${CLOUD} --name-template cert-manager | oc apply -f -
-> ```
-
-**Option B — ArgoCD:**
+<details>
+<summary><strong>Alternative — ArgoCD Application</strong></summary>
 
 ArgoCD needs permission to manage `CredentialsRequest`, `ServiceMonitor`, and cert-manager CRDs before syncing. Apply this ClusterRole and ClusterRoleBinding first:
 
@@ -239,26 +211,12 @@ rules:
   - cloudcredential.openshift.io
   resources:
   - credentialsrequests
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
+  verbs: [get, list, watch, create, update, patch, delete]
 - apiGroups:
   - monitoring.coreos.com
   resources:
   - servicemonitors
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
+  verbs: [get, list, watch, create, update, patch, delete]
 - apiGroups:
   - cert-manager.io
   resources:
@@ -268,14 +226,7 @@ rules:
   - certificaterequests
   - orders
   - challenges
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
+  verbs: [get, list, watch, create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -296,81 +247,32 @@ Then create the ArgoCD Application:
 
 ```bash
 cat <<EOF | oc apply -f -
-  apiVersion: argoproj.io/v1alpha1
-  kind: Application
-  metadata:
-    labels:   
-      app: cert-manager-operator
-    name: cert-manager-operator
-    namespace: openshift-gitops
-  spec:   
-    destination:
-      server: 'https://kubernetes.default.svc'
-    project: default                                        
-    source:
-      path: gitops/operators/cert-manager-operator
-      repoURL: https://github.com/alpha-hack-program/llm-d-guide.git
-      targetRevision: main                                                                                                                       
-      helm:
-        values: |   
-          cloud: ${CLOUD}
-    syncPolicy:   
-      automated:
-        prune: false                                                                                                                             
-        selfHeal: false                                     
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  labels:
+    app: cert-manager-operator
+  name: cert-manager-operator
+  namespace: openshift-gitops
+spec:
+  destination:
+    server: 'https://kubernetes.default.svc'
+  project: default
+  source:
+    path: gitops/operators/cert-manager-operator
+    repoURL: https://github.com/alpha-hack-program/llm-d-guide.git
+    targetRevision: main
+    helm:
+      values: |
+        cloud: ${CLOUD}
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
 EOF
 ```
 
-#### Installing Let's Encrypt Cluster Issuers and certificates for OpenShift Ingress and API Server
-
-> **Note:** Only if CLOUD==aws
-
-```bash
-# 0) Check if logged in with oc
-if ! oc whoami &>/dev/null; then
-  echo "Error: Not logged in to OpenShift. Please run 'oc login ...' before proceeding."
-  exit 1
-fi
-
-# 1) Wait for the operator to be ready
-echo -n "Waiting for cert-manager pods to be ready..."
-while [[ $(oc get pods -l app.kubernetes.io/instance=cert-manager -n cert-manager \
-  -o 'jsonpath={..status.conditions[?(@.type=="Ready")].status}') != "True True True" ]]; do
-  echo -n "." && sleep 1
-done
-echo -e "  [OK]"
-
-# 2) Validate and extract cluster domain
-# CRITICAL: Run validation script to ensure correct domain extraction
-./scripts/validate-cluster-domain.sh
-
-CLUSTER_DOMAIN=$(oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}')
-AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:=eu-west-1}"
-
-# Route53 Prerequisite Check (AWS only)
-# ⚠️  The cert-manager Route53 DNS-01 solver requires that the cluster's DNS hosted zone
-#     (spec.baseDomain from dns.config/cluster) is present in Route53 in the AWS account
-#     accessible via the cluster's cloud credentials.
-#
-# COMMON MISTAKE: Using a value that doesn't match the cluster's actual baseDomain
-#
-# The CLUSTER_DOMAIN must exactly match: oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}'
-#
-# Example: If your cluster's baseDomain is "mycluster.example.com":
-#   ✅ Correct:  CLUSTER_DOMAIN=mycluster.example.com (matches cluster's baseDomain)
-#   ❌ Wrong:    CLUSTER_DOMAIN=example.com (doesn't match - you extracted the parent domain instead)
-#
-# The validation script checks: does apps.${CLUSTER_DOMAIN} match the cluster's actual apps domain?
-# If it fails, the CLUSTER_DOMAIN doesn't match what's in the cluster.
-
-[[ -z "${CLUSTER_DOMAIN}" ]] && { echo "Error: CLUSTER_DOMAIN could not be detected."; exit 1; }
-[[ -z "${AWS_DEFAULT_REGION}" ]] && { echo "Error: AWS_DEFAULT_REGION is not set."; exit 1; }
-
-echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
-echo "AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}"
-```
-
-Install the certificate issuers:
+For Let's Encrypt certificate issuers via ArgoCD:
 
 ```bash
 cat <<EOF | oc apply -f -
@@ -402,6 +304,8 @@ spec:
 EOF
 ```
 
+</details>
+
 Verify certificate status:
 
 ```bash
@@ -416,82 +320,11 @@ oc get certificates.cert-manager.io --all-namespaces \
 | Node Feature Discovery (NFD) Operator | `stable` | `redhat-operators` | Detects GPU hardware capabilities |
 | NVIDIA GPU Operator | `v26.3` (latest) | `certified-operators` | GPU device plugin, drivers, DCGM |
 
-#### Installing the operators
+Each operator directory contains an `install.sh` script that queries `oc get packagemanifest` at runtime to resolve the current default channel and CSV, so the manifests stay valid across OCP releases. Alternatively, install via **Operators → OperatorHub** in the web console.
 
-**Option A — CLI (recommended):**
-
-Each directory contains an `install.sh` script that queries `oc get packagemanifest` at runtime to resolve the current default channel and CSV, so the manifests stay valid across OCP releases.
-
-Install NFD first, wait for it to be ready, then install the NVIDIA GPU operator:
-
-```bash
-# 1. Install NFD operator (resolves channel + CSV dynamically)
-bash gitops/operators/nfd/install.sh
-oc get csv -n openshift-nfd -w | grep nfd
-
-# Wait for NFD CSV to reach Succeeded
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
-  -n openshift-nfd -l operators.coreos.com/nfd.openshift-nfd= --timeout=300s
-
-# 2. Install NVIDIA GPU operator (resolves channel + CSV dynamically)
-bash gitops/operators/nvidia/install.sh
-oc get csv -n nvidia-gpu-operator -w | grep gpu-operator
-```
-
-**Option B — OpenShift Console:**
-
-Go to **Operators → OperatorHub**, search for each operator by name, and install with the channel and namespace shown in the table above.
-
-#### Applying the instance CRs
-
-Once both operator CSVs are `Succeeded`, create the `NodeFeatureDiscovery` and `ClusterPolicy` custom resources:
-
-```bash
-# Apply NFD instance (NodeFeatureDiscovery CR)
-oc apply -k gitops/instance/nfd
-
-# Wait for NFD labels to appear on nodes before applying ClusterPolicy
-oc wait --for=condition=Established crd/nodefeaturediscoveries.nfd.openshift.io --timeout=120s
-
-# Apply NVIDIA instance (ClusterPolicy CR)
-oc apply -k gitops/instance/nvidia
-
-# Wait for the ClusterPolicy to reach ready state (all GPU daemonsets deployed)
-oc wait --for=jsonpath='{.status.state}'=ready clusterpolicy/gpu-cluster-policy --timeout=600s
-```
+**CLI commands:** [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes.md)
 
 See: [NVIDIA GPU Operator on Red Hat OpenShift Container Platform](https://docs.nvidia.com/datacenter/cloud-native/openshift/latest/index.html)
-
-#### Adding A10G GPU nodes in AWS with MachineSets
-
-> **Before running:** decide how many availability zones you want GPU nodes in.
-> - **All 3 AZs** (`a b c`) — recommended for production; provides HA and lets the scheduler spread pods. Creates 3 MachineSets, one per AZ (each with `replicas: 1` by default = 3 GPU nodes total).
-> - **Single AZ** — sufficient for a single-model test deployment; cheaper. Replace `for AZ in a b c` with `for AZ in a` (or whichever AZ your cluster uses).
->
-> The `AMI_ID` must be the same RHCOS AMI used by your existing worker nodes. Retrieve it from a running MachineSet: `oc get machineset -n openshift-machine-api <name> -o jsonpath='{.spec.template.spec.providerSpec.value.ami.id}'`
-
-```bash
-export INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
-export AWS_REGION="${AWS_REGION:=eu-west-1}"
-# Get the RHCOS AMI from an existing worker MachineSet:
-export AMI_ID=$(oc get machineset -n openshift-machine-api \
-  -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}')
-export AWS_INSTANCE_TYPE="${AWS_INSTANCE_TYPE:=g5.2xlarge}"
-export AWS_INSTANCES_PER_AZ=${AWS_INSTANCES_PER_AZ:=1}
-
-echo "INFRA_ID=${INFRA_ID}, AWS_REGION=${AWS_REGION}, AMI_ID=${AMI_ID}, AWS_INSTANCE_TYPE=${AWS_INSTANCE_TYPE}"
-
-# All 3 AZs (production). Change to "for AZ in a" for a single-AZ test setup.
-for AZ in a b c; do
-  helm template gpu-worker ./gitops/instance/machine-sets/gpu-worker \
-    --set infrastructureId="${INFRA_ID}" \
-    --set region=${AWS_REGION} \
-    --set instanceType=${AWS_INSTANCE_TYPE} \
-    --set amiId="${AMI_ID}" \
-    --set devicePluginConfig="" \
-    --set az=${AZ} | oc apply -f -
-done
-```
 
 #### Adding L40S GPU nodes in AWS with MachineSets
 
@@ -546,77 +379,7 @@ done
 
 > **Note on Service Mesh 3.x:** Install OpenShift Service Mesh 3.x **only** if you intend to use the Llama Stack Operator. It is not a prerequisite for llm-d or base RHOAI model serving.
 
-```bash
-# 1. Connectivity Link (RHCL operator — Authorino + Limitador + Kuadrant CRDs)
-oc apply -k ./gitops/operators/connectivity-link
-# InstallPlan may require manual approval due to dependencies
-oc get installplan -n openshift-operators | grep -i "requiresapproval"
-# If an InstallPlan is pending, approve it:
-# oc patch installplan <NAME> -n openshift-operators --type merge -p '{"spec":{"approved":true}}'
-oc get csv -n openshift-operators -w | grep -E "rhcl|authorino|limitador"
-# Wait for AuthPolicy CRD
-oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
-
-# 1b. Create the Kuadrant CR — instantiates the Authorino and Limitador operands.
-#     Required for MaaS auth and rate-limiting enforcement.
-#     On OCP 4.19+ no Service Mesh is needed; restart the operator pod if it stays Not Ready.
-helm template gitops/instance/maas/connectivity-link \
-  --name-template maas-connectivity-link | oc apply -f -
-oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
-
-# 2. Leader Worker Set (required for llm-d multi-node deployments)
-# Apply in a loop to work around potential CRD install race conditions
-until oc apply -k ./gitops/operators/leader-worker-set; do
-  echo "Waiting for LeaderWorkerSet CRD to become available..."
-  sleep 10
-done
-oc wait --for=condition=Established crd/leaderworkersetoperators.operator.openshift.io --timeout=300s
-oc get csv -n openshift-lws-operator -w | grep -E "leader-worker-set"
-
-# 3. Red Hat OpenShift AI Operator
-# Choose olmProfile: "stable" (GA, stable-3.x) or "ea" (Early Access, beta channel).
-# Before applying, verify startingCSV matches the live packagemanifest:
-#   oc get packagemanifest rhods-operator -n openshift-marketplace \
-#     -o jsonpath='{.status.channels[?(@.name=="<channel>")].currentCSV}'
-# If you need to switch channels after a first install, delete the Subscription and CSV first:
-#   oc delete subscription rhods-operator -n redhat-ods-operator
-#   oc delete csv <previous-csv> -n redhat-ods-operator
-RHOAI_OLM_PROFILE="${RHOAI_OLM_PROFILE:-stable}"
-helm template rhoai-operator ./gitops/operators/rhoai \
-  --set olmProfile="${RHOAI_OLM_PROFILE}" | oc apply -f -
-oc get csv -n redhat-ods-operator -w | grep -E "rhods"
-
-# 4. Configure OpenShift AI (DSCInitialization and DataScienceCluster)
-oc wait --for=condition=Established crd/dashboards.components.platform.opendatahub.io --timeout=600s
-# Render and apply (chart emits resources across multiple namespaces).
-# Note: OdhDashboardConfig CRD may not be ready on the first pass. If the apply fails on
-# OdhDashboardConfig, wait for the CRD and re-run:
-#   oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io --timeout=120s
-helm template rhoai ./gitops/instance/rhoai | oc apply -f -
-
-# Wait for LLMInferenceService CRD and controller pods
-oc wait --for=condition=Established crd/llminferenceservices.serving.kserve.io --timeout=300s
-oc wait --for=condition=ready pod -l control-plane=odh-model-controller \
-  -n redhat-ods-applications --timeout=300s
-oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager \
-  -n redhat-ods-applications --timeout=300s
-
-# 5. Monitoring stack
-# a) Tempo Operator (distributed tracing)
-oc apply -k gitops/operators/tempo-operator
-oc get csv -n openshift-operators -w | grep -E "tempo"
-
-# b) OpenTelemetry Operator
-oc apply -k gitops/operators/opentelemetry-operator
-oc get csv -n openshift-operators -w | grep -E "opentelemetry"
-oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
-
-# c) Grafana Operator (optional — for custom dashboards)
-oc apply -k gitops/operators/grafana-operator
-oc get csv -n grafana-operator -w | grep -E "grafana"
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator \
-  -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
-```
+**CLI commands:** [Phase 3 — Core Operators + RHOAI](docs/phases/03-operators-rhoai.md)
 
 #### Optional — Red Hat Build of Kueue (GPUaaS / Distributed Workloads only)
 
@@ -630,99 +393,7 @@ oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator \
 > is toggled in `OdhDashboardConfig`. Restart the dashboard after any change:
 > `oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications`
 
-```bash
-# OPTIONAL — only for GPUaaS / distributed workloads
-oc apply -k gitops/operators/kueue-operator
-oc get csv -n openshift-operators -w | grep -E "kueue"
-```
-
-```bash
-# OPTIONAL — wait for Kueue CRDs before configuring ClusterQueue
-oc wait --for=condition=Established crd/clusterqueues.kueue.x-k8s.io --timeout=600s
-oc wait --for=condition=Established crd/resourceflavors.kueue.x-k8s.io --timeout=600s
-oc wait --for=condition=Established crd/localqueues.kueue.x-k8s.io --timeout=600s
-```
-
-```bash
-# OPTIONAL — set Kueue to Managed in the DataScienceCluster after operator is ready
-oc patch datasciencecluster default-dsc \
-  --type='merge' \
-  -p '{"spec":{"components":{"kueue":{"managementState":"Managed","defaultClusterQueueName":"default","defaultLocalQueueName":"default"}}}}'
-```
-
-```bash
-# OPTIONAL — minimal ClusterQueue + ResourceFlavor setup
-cat <<EOF | oc apply -f -
-apiVersion: kueue.x-k8s.io/v1beta1
-kind: ResourceFlavor
-metadata:
-  name: default-flavor
----
-apiVersion: kueue.x-k8s.io/v1beta1
-kind: ClusterQueue
-metadata:
-  name: default
-spec:
-  namespaceSelector: {}
-  resourceGroups:
-  - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
-    flavors:
-    - name: default-flavor
-      resources:
-      - name: cpu
-        nominalQuota: "64"
-      - name: memory
-        nominalQuota: "256Gi"
-      - name: nvidia.com/gpu
-        nominalQuota: "8"
-EOF
-```
-
-```bash
-# OPTIONAL — create a LocalQueue in each Kueue-managed namespace
-cat <<EOF | oc apply -f -
-apiVersion: kueue.x-k8s.io/v1beta1
-kind: LocalQueue
-metadata:
-  name: default
-  namespace: <your-namespace>
-spec:
-  clusterQueue: default
-EOF
-```
-
-```bash
-# OPTIONAL — Queue-type hardware profile for Kueue-managed namespaces
-# (Node-type profiles are invisible in namespaces with kueue.openshift.io/managed=true)
-cat <<EOF | oc apply -f -
-apiVersion: infrastructure.opendatahub.io/v1
-kind: HardwareProfile
-metadata:
-  name: default-cpu-queue
-  namespace: redhat-ods-applications
-  annotations:
-    opendatahub.io/display-name: "Default CPU (Kueue)"
-    opendatahub.io/disabled: "false"
-spec:
-  identifiers:
-  - displayName: CPU
-    identifier: cpu
-    minCount: 1
-    maxCount: 4
-    defaultCount: 2
-    resourceType: CPU
-  - displayName: Memory
-    identifier: memory
-    minCount: 2Gi
-    maxCount: 8Gi
-    defaultCount: 4Gi
-    resourceType: Memory
-  scheduling:
-    type: Queue
-    queue:
-      localQueueName: default
-EOF
-```
+**CLI commands:** [Phase 3 — Optional Kueue section](docs/phases/03-operators-rhoai.md#optional--kueue-gpuaas--distributed-workloads-only)
 
 ### 3.4 Pipeline Dependencies
 
@@ -732,17 +403,7 @@ EOF
 
 > **Note:** The OpenShift Pipelines operator is optional for llm-d. It is required only if you plan to use Data Science Pipelines features in RHOAI.
 
-```bash
-oc apply -k gitops/operators/pipelines
-
-# If the InstallPlan requires manual approval (YOU MAY NEED TO WAIT FOR SOME MINS TO SEE THE INSTALLPLAN!!):
-INSTALLPLAN_NAME=$(oc get installplan -n openshift-operators -o json | \
-  jq -r '.items[] | select(.spec.clusterServiceVersionNames[]? | contains("openshift-pipelines-operator-rh")) | .metadata.name')
-oc patch installplan "$INSTALLPLAN_NAME" -n openshift-operators \
-  --type merge --patch '{"spec":{"approved":true}}'
-
-oc get csv -n openshift-operators -w | grep -E "pipelines"
-```
+**CLI commands:** [Phase 3 — Optional Pipelines section](docs/phases/03-operators-rhoai.md#optional--openshift-pipelines-data-science-pipelines-only)
 
 ### 3.5 Check Operators
 
@@ -758,57 +419,9 @@ Deploy llm-d on a connected OpenShift 4.21 cluster with RHOAI 3.4.
 
 > **Prerequisites:** Complete all steps in Section 3 before proceeding. In particular, confirm that the `LLMInferenceService` CRD is available (`oc get crd llminferenceservices.serving.kserve.io`) and that both `odh-model-controller` and `kserve-controller-manager` pods are Running in `redhat-ods-applications`.
 
-## Step 1: Configure the Gateway
-
-Create the GatewayClass and Gateway for llm-d.
-
-**Using a LoadBalancer with a pre-existing certificate:**
-
-```bash
-APP_NAME=gateway
-GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
-CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
-
-helm template gitops/instance/llm-d/gateway \
-  --name-template ${APP_NAME} \
-  --set gatewayName="${GATEWAY_NAME}" \
-  --set clusterDomain="${CLUSTER_DOMAIN}" \
-  --set subdomain=inference \
-  --set useOpenShiftRoute=false \
-  --set tls.secretName=ingress-certs \
-  --include-crds | oc apply -f -
-```
-
-**Using OpenShift router and generating a self-signed certificate**
-
-```bash
-APP_NAME=gateway
-GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
-CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
-
-helm template gitops/instance/llm-d/gateway \
-  --name-template ${APP_NAME} \
-  --set gatewayName="${GATEWAY_NAME}" \
-  --set clusterDomain="${CLUSTER_DOMAIN}" \
-  --set subdomain=inference \
-  --set useOpenShiftRoute=true \
-  --set tls.secretName="${GATEWAY_NAME}" \
-  --set tls.generate=true --include-crds | oc apply -f -
-```
+**Step-by-step commands:** Follow [Phase 5 — llm-d Quick Start](docs/phases/05-llmd-quickstart.md) for gateway setup, namespace creation, model deployment, endpoint testing, monitoring, and intelligent routing verification.
 
 > **Other gateway configurations:** See `gitops/instance/llm-d/gateway/README.md` for alternative setups (bare metal, self-signed certs, OpenShift Routes).
-
-Verify the Gateway is ready:
-
-```bash
-oc get gateway -n openshift-ingress
-
-# Expected output:
-# NAME                              CLASS                            PROGRAMMED   AGE
-# openshift-ai-inference            openshift-ai-inference-class     True         ...
-```
 
 ### How the pieces connect
 
@@ -871,217 +484,6 @@ flowchart TD
 - **InferencePool** is a Gateway API Inference Extension resource. It tells the Envoy data plane to delegate endpoint selection to the **EPP (Endpoint Picker Pod)** rather than using standard round-robin load balancing.
 - **EPP** is a sidecar in the workload Deployment. It implements llm-d's intelligent routing: KV-cache-aware selection, prefill/decode disaggregation, and load-aware scheduling. Envoy calls it per-request via ext-proc and EPP replies with the address of the chosen vLLM pod.
 - **LLMInferenceService** is the only resource you manage — the kserve controller and `odh-model-controller` reconcile everything else automatically.
-
-## Step 2: Create Namespace
-
-```bash
-PROJECT="llm-d-demo"
-
-oc new-project ${PROJECT}
-oc label namespace ${PROJECT} modelmesh-enabled=false opendatahub.io/dashboard=true
-```
-
-## Step 3: Deploy an LLMInferenceService
-
-### Option A — Qwen3-8B-FP8 via OCI ModelCar (recommended for air-gapped / registry-cached deployments)
-
-Create a values override file:
-
-```bash
-cat <<EOF > qwen3-8b-fp8-dynamic-oci.tmp.yaml
-deploymentType: intelligent-inference
-serviceName: qwen3-8b
-replicas: 2
-useStartupProbe: true
-storage:
-  type: oci
-  uri: oci://registry.redhat.io/rhelai1/modelcar-qwen3-8b-fp8-dynamic:1.5
-model:
-  name: alibaba/qwen3-8b
-resources:
-  limits: { cpu: "4", memory: 16Gi, gpuCount: "1" }
-  requests: { cpu: "1", memory: 8Gi, gpuCount: "1" }
-env:
-  - name: VLLM_ADDITIONAL_ARGS
-    value: "--disable-uvicorn-access-log --enable-auto-tool-choice --tool-call-parser hermes"
-EOF
-```
-
-Render and apply:
-
-```bash
-helm template qwen3-8b gitops/instance/llm-d/inference \
-  -n ${PROJECT} \
-  -f gitops/instance/llm-d/inference/values.yaml \
-  -f qwen3-8b-fp8-dynamic-oci.tmp.yaml \
-  --include-crds | oc apply -f -
-```
-
-### Option B — Facebook OPT-125m via HuggingFace (quick test with a small public model)
-
-```bash
-cat <<EOF > facebook-opt-125m-hf.tmp.yaml
-deploymentType: intelligent-inference
-serviceName: opt-125m
-replicas: 1
-useStartupProbe: true
-storage:
-  type: hf
-  uri: hf://facebook/opt-125m
-model:
-  name: facebook/opt-125m
-resources:
-  limits: { cpu: "2", memory: 8Gi, gpuCount: 1 }
-  requests: { cpu: "1", memory: 4Gi, gpuCount: 1 }
-EOF
-
-helm template opt-125m gitops/instance/llm-d/inference \
-  -n ${PROJECT} \
-  -f gitops/instance/llm-d/inference/values.yaml \
-  -f facebook-opt-125m-hf.tmp.yaml \
-  --include-crds | oc apply -f -
-```
-
-> **HuggingFace access:** If using a gated model, ensure your `HF_TOKEN` secret is configured in the namespace before deploying.
-
-## Step 4: Verify Deployment
-
-### Check LLMInferenceService status
-
-```bash
-oc get llminferenceservice -w -n ${PROJECT}
-
-# Expected output:
-# NAME       URL                                                    READY   AGE
-# qwen3-8b   https://<gateway-url>/${PROJECT}/qwen3-8b             True    5m
-```
-
-### Check pods
-
-```bash
-oc get pods -w -n ${PROJECT}
-
-# Expected output:
-# NAME                                            READY   STATUS    AGE
-# qwen3-8b-kserve-xxxxx-xxxxx                    1/1     Running   3m
-# qwen3-8b-kserve-xxxxx-xxxxx                    1/1     Running   3m
-# qwen3-8b-kserve-router-scheduler-xxxxx         1/1     Running   3m
-```
-
-### Watch pod logs
-
-```bash
-# vLLM server logs
-oc logs -f \
-  -l app.kubernetes.io/name=qwen3-8b,app.kubernetes.io/component=llminferenceservice-workload \
-  -n ${PROJECT}
-
-# Scheduler logs
-oc logs -f \
-  -l app.kubernetes.io/name=qwen3-8b,app.kubernetes.io/component=llminferenceservice-router-scheduler \
-  -n ${PROJECT}
-```
-
-## Step 5: Test the Endpoint
-
-### Get the inference URL
-
-```bash
-INFERENCE_URL=$(oc get gateway openshift-ai-inference -n openshift-ingress \
-  -o json | jq -r '.spec.listeners[] | select(.name=="https").hostname')
-echo "Inference URL: https://${INFERENCE_URL}"
-```
-
-### List available models
-
-```bash
-curl -s https://${INFERENCE_URL}/${PROJECT}/qwen3-8b/v1/models | jq
-```
-
-### Send a completion request
-
-```bash
-curl -s -X POST https://${INFERENCE_URL}/${PROJECT}/qwen3-8b/v1/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "alibaba/qwen3-8b",
-    "prompt": "Explain the difference between supervised and unsupervised learning.",
-    "max_tokens": 50,
-    "temperature": 0.7
-  }' | jq '.choices[0].text'
-```
-
-### Send a chat completion request
-
-```bash
-curl -s -X POST https://${INFERENCE_URL}/${PROJECT}/qwen3-8b/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "alibaba/qwen3-8b",
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant. Be VERY concise"},
-      {"role": "user", "content": "Answer to the Ultimate Question of Life, the Universe, and Everything."}
-    ],
-    "max_tokens": 200,
-    "temperature": 0.7
-  }' | jq '.choices[0].message.content'
-```
-
-## Step 6: Deploy Monitoring
-
-**Prerequisites:**
-- User Workload Monitoring enabled (MANDATORY for metrics collection)
-- Cluster Observability Operator installed (MANDATORY for dashboards)
-
-```bash
-# Enable User Workload Monitoring (if not already enabled)
-cat <<EOF | oc apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cluster-monitoring-config
-  namespace: openshift-monitoring
-data:
-  config.yaml: |
-    enableUserWorkload: true
-EOF
-
-# Wait for prometheus-user-workload pods (~5 min)
-oc get pods -n openshift-user-workload-monitoring -w
-
-# Install Cluster Observability Operator
-oc apply -k gitops/operators/cluster-observability-operator
-
-# Deploy Perses dashboard
-oc apply -f gitops/instance/llm-d-observability/perses-dashboard-intelligent-inference.yaml
-```
-
-**Access dashboard:**
-OpenShift Console → **Observe** → **Dashboards** (Perses tab) → Select **"llm-d Intelligent Inference"**
-
-For complete setup, troubleshooting, and metrics reference, see:  
-[gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md](gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md)
-
-## Step 7: Verify Intelligent Routing (Recommended)
-
-After deploying your first model, verify that llm-d's KV-cache-aware intelligent routing is operational:
-
-```bash
-./scripts/verify-intelligent-router.sh
-```
-
-**What this proves:**
-- ✅ EPP scheduler making per-request routing decisions
-- ✅ Prefix cache optimization active (~94% hit rate)
-- ✅ Full llm-d stack operational (not falling back to basic round-robin)
-
-**Expected output:**
-- 20/20 HTTP 200 responses
-- Prefix cache queries increase by ~680 tokens
-- Prefix cache hits increase by ~640 tokens
-- EPP logs show 20 "Request handled" routing decisions
-
-For detailed explanation of the architecture, troubleshooting, and multi-replica testing, see: [llm-d Intelligent Routing Verification Guide](LLMD-INTELLIGENT-ROUTING-VERIFICATION.md)
 
 ---
 
@@ -1286,254 +688,23 @@ flowchart TD
 
 ### 9.2 Install Steps
 
-**Step 1 — Kuadrant CR** (Authorino + Limitador instances):
+**Step-by-step commands:** Follow [Phase 6 — MaaS](docs/phases/06-maas.md) for the full install sequence (gateway → database → enable MaaS → Authorino TLS → subscription bootstrap → model registration → dashboard flags → smoke test).
 
-```bash
-helm template gitops/instance/maas/connectivity-link \
-  --name-template maas-connectivity-link | oc apply -f -
-oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
-# If it stays Not Ready with "istio/envoy gateway not installed", restart the operator pod:
-# oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
-```
+**Install order (sequence matters):**
 
-**Step 2 — MaaS Gateway** (GatewayClass + Gateway + Route):
+1. **Kuadrant CR** — instantiate Authorino + Limitador
+2. **MaaS Gateway** — GatewayClass + Gateway + OCP Route (use `tls.secretName=router-certs-default`)
+3. **MaaS Database** — PostgreSQL + `maas-db-config` secret
+4. **Enable MaaS in DSC** — re-apply RHOAI chart with `modelsAsService=true`
+5. **Authorino TLS** — annotate service → patch CR → set env vars → annotate gateway
+6. **Bootstrap subscriptions** — `models-as-a-service` namespace + Tenant + DB_CONNECTION_URL patch
+7. **Register models** — MaaSModelRef + MaaSSubscription + MaaSAuthPolicy
+8. **Enable dashboard** — four `OdhDashboardConfig` flags
 
-```bash
-CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-helm template gitops/instance/maas/gateway \
-  --name-template maas-gateway \
-  --set clusterDomain="${CLUSTER_DOMAIN}" \
-  --set useOpenShiftRoute=true \
-  --set tls.secretName=router-certs-default \
-  --set "gateway.modelNamespaces={llm-d-demo,maas-demo}" | oc apply -f -
-oc get gateway maas-default-gateway -n openshift-ingress
-```
-
-> **Important:** Every namespace that contains MaaS-published `LLMInferenceService` resources must be listed in `gateway.modelNamespaces`. If a namespace is missing, the HTTPRoute will be rejected with `NotAllowedByListeners` and the `LLMInferenceService` will show `HTTPRoutesReady: False`.
-
-> **Note — use `router-certs-default`, not `ingress-certs`:** The gateway chart annotates the Gateway Service with `service.beta.openshift.io/serving-cert-secret-name=<tls.secretName>`, which causes the service-ca-operator to create (or overwrite) that secret with a certificate valid only for the internal Service DNS name (`maas-default-gateway-openshift-default.openshift-ingress.svc`). If you pass `tls.secretName=ingress-certs`, the service-ca-operator silently replaces whatever was there with this internal-only cert. The Envoy pod then presents it to all clients — including the Gen AI Studio backend, which connects to `https://maas.<cluster-domain>/maas-api/...` and receives a certificate that does not cover the public hostname, producing `x509: certificate is valid for ...openshift-ingress.svc, not maas.<cluster-domain>`. The fix is to pass `tls.secretName=router-certs-default`, which already exists in `openshift-ingress` and contains the wildcard cert `*.apps.<cluster-domain>` signed by the OCP ingress operator CA — a CA that is already present in every RHOAI component's trust bundle.
-
-**Step 3 — MaaS Database** (PostgreSQL + `maas-db-config` secret):
-
-The `maas-api` pod will not start without a PostgreSQL database. The chart in `gitops/instance/maas/database` deploys a PostgreSQL instance in `redhat-ods-applications` and creates the `maas-db-config` secret that `maas-api` reads for its `DB_CONNECTION_URL`.
-
-> **Password handling:** `helm template` skips the `lookup` function, so the password cannot be auto-generated — you must provide one explicitly. Generate a random password and pass it with `--set db.password=<password>`. Keep the password; you will need it for upgrades (`helm upgrade` can reuse it via lookup, but `helm template | oc apply` cannot).
-
-```bash
-DB_PASSWORD=$(openssl rand -base64 18 | tr -d '+/=' | head -c 24)
-echo "Save this DB password: ${DB_PASSWORD}"
-
-helm template gitops/instance/maas/database \
-  --name-template maas-database \
-  --namespace redhat-ods-applications \
-  --set db.password="${DB_PASSWORD}" | oc apply -n redhat-ods-applications -f -
-
-# Wait for the database pod to be Ready
-oc wait --for=condition=ready pod -l app=maas-db \
-  -n redhat-ods-applications --timeout=120s
-
-# Verify the secret was created
-oc get secret maas-db-config -n redhat-ods-applications
-```
-
-**Step 4 — Enable MaaS in the DataScienceCluster:**
-
-> **Why this order matters:** `modelsAsService` is kept `false` in `gitops/instance/rhoai/values.yaml` during Phase 3 (RHOAI install). The `maas-api` pod requires both the MaaS gateway (Step 2) and the database secret (Step 3) to exist before it can start. Re-apply the chart here, after both are in place. This step creates the `maas-controller` and `maas-api` pods, which are required for Step 5 (Authorino TLS configuration).
-
-```bash
-helm template rhoai ./gitops/instance/rhoai --set modelsAsService=true | oc apply -f -
-
-# Wait for maas-api to start
-oc wait --for=condition=ready pod -l app.kubernetes.io/name=maas-api \
-  -n redhat-ods-applications --timeout=120s
-oc get pods -n redhat-ods-applications -l app.kubernetes.io/name=maas-api
-```
-
-**Step 5 — Configure Authorino TLS:**
-
-> **IMPORTANT:** This step requires the `maas-controller` pod from Step 4 to be running. The maas-controller creates the TLS EnvoyFilter when the gateway annotation changes.
-
-This is required for the MaaS API gateway to communicate with Authorino securely. Without it, the `maas-api/v1/api-keys` endpoint returns `500 Internal Server Error`.
-
-```bash
-# 5a. Generate a serving certificate for Authorino (service-ca-operator signs it)
-oc annotate service authorino-authorino-authorization \
-  -n kuadrant-system \
-  service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert \
-  --overwrite
-
-# 5b. Enable TLS on the Authorino CR
-oc patch authorino authorino -n kuadrant-system --type=merge --patch '{
-  "spec": {
-    "listener": {
-      "tls": {
-        "enabled": true,
-        "certSecretRef": {"name": "authorino-server-cert"}
-      }
-    }
-  }
-}'
-
-# 5c. Configure Authorino to validate certs using the cluster CA bundle
-oc -n kuadrant-system set env deployment/authorino \
-  SSL_CERT_FILE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
-  REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt
-oc rollout status deployment/authorino -n kuadrant-system --timeout=90s
-
-# 5d. Annotate the gateway — maas-controller creates an EnvoyFilter for Authorino TLS.
-#     IMPORTANT: Do this AFTER steps 5a-5c, or remove+re-add the annotation to force
-#     the maas-controller to reconcile and create the maas-default-gateway-authn-ssl filter.
-oc annotate gateway maas-default-gateway \
-  -n openshift-ingress \
-  security.opendatahub.io/authorino-tls-bootstrap="true" \
-  --overwrite
-```
-
-Verify:
-```bash
-oc get service authorino-authorino-authorization -n kuadrant-system \
-  -o jsonpath='{.metadata.annotations.service\.beta\.openshift\.io/serving-cert-secret-name}'
-# Expected: authorino-server-cert
-
-oc get secret authorino-server-cert -n kuadrant-system
-# Expected: kubernetes.io/tls with 2 data entries
-
-oc get authorino authorino -n kuadrant-system -o jsonpath='{.spec.listener.tls.enabled}'
-# Expected: true
-
-oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress
-# Expected: present (created by maas-controller after annotation)
-```
-
-**Step 6 — Bootstrap the MaaS 3.4 subscription namespace:**
-
-MaaS 3.4 uses `Tenant`, `MaaSModelRef`, `MaaSSubscription`, and `MaaSAuthPolicy` CRs. All live in the `models-as-a-service` namespace.
-
-```bash
-# 5a. Create the namespace
-oc create namespace models-as-a-service
-
-# 5b. Create the Tenant CR — must be named exactly "default-tenant"
-# The Tenant CR is the global MaaS configuration object (singleton per cluster).
-# It controls:
-#   - API key settings (maxExpirationDays: max lifetime for generated keys)
-#   - Gateway reference (which Gateway to use for model routing)
-#   - Optional: external OIDC, telemetry config
-# The maas-api pod is hardcoded to look for a Tenant named "default-tenant"
-# in the models-as-a-service namespace.
-cat <<'EOF' | oc apply -f -
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: Tenant
-metadata:
-  name: default-tenant              # MUST be exactly "default-tenant"
-  namespace: models-as-a-service
-spec:
-  apiKeys:
-    maxExpirationDays: 90           # Max API key lifetime (adjust for your security policy)
-  gatewayRef:
-    name: maas-default-gateway      # Which Gateway to use for model routing
-    namespace: openshift-ingress
-EOF
-
-# 5c. Inject the DB connection URL into the maas-api deployment
-oc patch deployment maas-api -n redhat-ods-applications --type=json -p='[{
-  "op": "add",
-  "path": "/spec/template/spec/containers/0/env/-",
-  "value": {
-    "name": "DB_CONNECTION_URL",
-    "valueFrom": {"secretKeyRef": {"name": "maas-db-config", "key": "DB_CONNECTION_URL"}}
-  }
-}]'
-oc rollout status deployment/maas-api -n redhat-ods-applications --timeout=60s
-```
-
-**Step 7 — Register models and create subscription/auth policies:**
-
-For each model namespace (repeat `MaaSModelRef` for every `LLMInferenceService` you want to publish):
-
-```bash
-# 6a. Create MaaSModelRef CRs in the model namespace
-cat <<'EOF' | oc apply -f -
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSModelRef
-metadata:
-  name: <model-name>          # must match LLMInferenceService name
-  namespace: <model-namespace>
-spec:
-  modelRef:
-    kind: LLMInferenceService
-    name: <model-name>
-EOF
-
-# 6b. Create a MaaSSubscription (token rate limits per model, per group)
-cat <<'EOF' | oc apply -f -
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSSubscription
-metadata:
-  name: admin-subscription
-  namespace: models-as-a-service
-spec:
-  priority: 0
-  owner:
-    groups:
-      - name: cluster-admins
-  modelRefs:
-    - name: <model-name>
-      namespace: <model-namespace>
-      tokenRateLimits:
-        - limit: 100000
-          window: 1h
-EOF
-
-# 6c. Create a MaaSAuthPolicy (grants groups access to models)
-cat <<'EOF' | oc apply -f -
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaaSAuthPolicy
-metadata:
-  name: admin-auth-policy
-  namespace: models-as-a-service
-spec:
-  subjects:
-    groups:
-      - name: cluster-admins
-  modelRefs:
-    - name: <model-name>
-      namespace: <model-namespace>
-EOF
-```
-
-**Step 8 — Enable the dashboard interface and MaaS auth policies:**
-
-```bash
-oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge \
-  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"modelAsService":true,"maasAuthPolicies":true,"vLLMDeploymentOnMaaS":true}}}'
-```
-
-> **Note:** The `maas-ui` sidecar in the dashboard discovers the MaaS API at `https://maas.<cluster-domain>/maas-api`.
-> This requires the MaaS gateway OCP Route (created by the gateway chart in Step 1) to use hostname `maas.<cluster-domain>`.
-> If you see 500 errors on the API keys page, verify the gateway route hostname: `oc get route maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.host}'` — it must be `maas.<cluster-domain>`, not `maas-default-gateway-openshift-ingress.<cluster-domain>`. If wrong, re-apply the gateway chart.
-
-**Verify end-to-end — generate and use an API key:**
-
-```bash
-TOKEN=$(oc whoami -t)
-CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-MAAS_GW="maas.${CLUSTER_DOMAIN}"
-
-# Create an API key
-curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"my-key","expiresInDays":30}'
-# Returns: {"key":"sk-oai-...","id":"...","name":"my-key","createdAt":"..."}
-
-# Use the API key to call a model
-API_KEY="sk-oai-..."
-curl -sk "https://${MAAS_GW}/llm-d-demo/<model-name>/v1/chat/completions" \
-  -H "Authorization: Bearer ${API_KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"<model-name>","messages":[{"role":"user","content":"Hello"}]}'
-```
+> **Key notes:**
+> - Use `tls.secretName=router-certs-default`, **not** `ingress-certs` — the service-ca-operator overwrites `ingress-certs` with an internal-only cert. See [Phase 6 Step 1](docs/phases/06-maas.md#step-1--maas-gateway) for details.
+> - `modelsAsService` must stay `false` during Phase 3. The `maas-api` pod requires both the gateway and database to exist before starting.
+> - Without Authorino TLS, `POST /maas-api/v1/api-keys` returns `500`.
 
 ### 9.3 Publish a Model to MaaS
 
@@ -2453,6 +1624,29 @@ oc get groups
 ```
 
 All six lists should be empty (except the two system groups).
+
+---
+
+## AI-Assisted Installation
+
+For guided installation using Claude Code, Cursor, or compatible AI coding assistants,
+see the [Co-pilot Runbook](AGENTS.md). The runbook breaks installation into 7 phases
+with wait conditions and human gates:
+
+| Phase | Guide | Approx. time |
+|---|---|---|
+| 0 — Cluster Validation | [docs/phases/00-validation.md](docs/phases/00-validation.md) | 5 min |
+| 1 — ArgoCD + cert-manager | [docs/phases/01-argocd-certs.md](docs/phases/01-argocd-certs.md) | 15–20 min |
+| 2 — GPU Nodes + NFD + NVIDIA | [docs/phases/02-gpu-nodes.md](docs/phases/02-gpu-nodes.md) | 20–40 min |
+| 3 — Operators + RHOAI | [docs/phases/03-operators-rhoai.md](docs/phases/03-operators-rhoai.md) | 20–30 min |
+| 4 — Monitoring | [docs/phases/04-monitoring.md](docs/phases/04-monitoring.md) | 10 min |
+| 5 — llm-d Quick Start | [docs/phases/05-llmd-quickstart.md](docs/phases/05-llmd-quickstart.md) | 15–20 min |
+| 6 — MaaS | [docs/phases/06-maas.md](docs/phases/06-maas.md) | 10–15 min |
+
+Reference material:
+- [Validation Commands](docs/reference/validation.md)
+- [MaaS Troubleshooting](docs/reference/maas-troubleshooting.md)
+- [ExternalModel Guide](docs/reference/external-models.md)
 
 ---
 
