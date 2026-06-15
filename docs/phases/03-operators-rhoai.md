@@ -259,22 +259,6 @@ oc label namespace <project-name> modelmesh-enabled=false opendatahub.io/dashboa
 
 ---
 
-## Optional — OpenShift Pipelines (Data Science Pipelines only)
-
-> Skip if you only need llm-d inference. Install when using **Data Science Pipelines** in RHOAI.
-
-```bash
-oc apply -k gitops/operators/pipelines
-# InstallPlan may require manual approval (wait for the InstallPlan to appear):
-INSTALLPLAN_NAME=$(oc get installplan -n openshift-operators -o json | \
-  jq -r '.items[] | select(.spec.clusterServiceVersionNames[]? | contains("openshift-pipelines-operator-rh")) | .metadata.name')
-oc patch installplan "$INSTALLPLAN_NAME" -n openshift-operators \
-  --type merge --patch '{"spec":{"approved":true}}'
-oc get csv -n openshift-operators -w | grep -E "pipelines"
-```
-
----
-
 **Human gates:**
 - **InstallPlan approvals:** Some operators require manual approval. The assistant should check and list pending plans, but you must confirm before it patches them.
 - **CSV verification:** Run `./scripts/check-operators.sh` at the end. All required operators must be `Succeeded` before proceeding.

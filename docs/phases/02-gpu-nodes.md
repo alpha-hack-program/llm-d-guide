@@ -50,6 +50,10 @@ Do NOT decide this yourself — the number of GPU nodes affects cost and schedul
    # Install NVIDIA GPU operator (resolves channel + CSV dynamically)
    bash gitops/operators/nvidia/install.sh
    oc get csv -n nvidia-gpu-operator -w | grep gpu-operator
+
+   # Wait for NVIDIA GPU operator CSV to reach Succeeded
+   oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
+     -n nvidia-gpu-operator -l operators.coreos.com/gpu-operator-certified.nvidia-gpu-operator= --timeout=300s
    ```
 
 3. Apply the instance CRs (after both CSVs are `Succeeded`):

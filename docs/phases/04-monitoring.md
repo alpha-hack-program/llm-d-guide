@@ -3,7 +3,9 @@
 > Part of the [llm-d-demo Co-pilot Runbook](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
-**Goal:** Install COO for llm-d metrics dashboards.
+**Goal:** Extend the basic monitoring stack with llm-d Perses dashboards surfaced directly in the OpenShift console.
+
+OpenShift's built-in User Workload Monitoring (Prometheus + Thanos) already scrapes vLLM and KServe metrics once UWM is enabled. This phase layers the **Cluster Observability Operator (COO)** on top, which adds Perses dashboard support to the OCP console's **Observe → Dashboards** view — no separate Grafana instance required.
 
 ```bash
 # Enable User Workload Monitoring (MANDATORY)

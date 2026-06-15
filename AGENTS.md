@@ -77,21 +77,30 @@ llm-d-guide/
 
 ## Environment Variables
 
-Collect these before starting. The assistant should ask for any that are missing.
+### Auto-derived — run these commands, never ask the user
 
-| Variable | Description | Example |
+| Variable | Command | Used in |
 |---|---|---|
-| `CLOUD` | Cloud provider for cert-manager chart: `aws` (Route53 DNS-01) or `none` (bare metal / non-AWS). **Must be confirmed with the user before Phase 1 — do not default.** | `aws` |
-| `CLUSTER_DOMAIN` | Cluster DNS base domain: from `oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}'` (cert-manager / Route53 flows in README) | `apps.mycluster.example.com` |
-| `AWS_REGION` / `AWS_DEFAULT_REGION` | AWS region for GPU MachineSets (`AWS_REGION`) and Let's Encrypt Route53 issuer (`AWS_DEFAULT_REGION` in README examples) | `eu-west-1` |
-| `AWS_INSTANCE_TYPE` | GPU instance type | `g5.2xlarge` |
-| `AMI_ID` | RHCOS AMI for the GPU nodes | `ami-0b8c325b7499597c6` |
-| `AWS_INSTANCES_PER_AZ` | GPU nodes per availability zone | `1` |
-| `INFRA_ID` | OpenShift infrastructure name for AWS MachineSet chart (`oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}'`) | `mycluster-abcd123` |
-| `HF_TOKEN` | HuggingFace token for gated models | `hf_...` |
-| `GATEWAY_NAME` | Name for the llm-d gateway | `openshift-ai-inference` |
-| `PROJECT` | Namespace for llm-d workloads | `llm-d-demo` |
-| `RHOAI_OLM_PROFILE` | RHOAI **operator** install preset: `stable` (default) = `stable-3.x`; `ea` = `beta` channel. Verify current CSV via `packagemanifest` before use. Passed to `helm template ./gitops/operators/rhoai --set olmProfile=...` | `stable` |
+| `CLUSTER_DOMAIN` | `oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}'` | Phase 1 |
+| `AWS_REGION` | `oc get infrastructure cluster -o jsonpath='{.status.platformStatus.aws.region}'` | Phase 1, 2 |
+| `INFRA_ID` | `oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}'` | Phase 2 |
+| `AMI_ID` | `oc get machineset -n openshift-machine-api -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}'` | Phase 2 |
+
+> **Note on `AMI_ID`:** Every OCP cluster on AWS already has worker MachineSets whose `providerSpec` contains the exact RHCOS AMI the cluster was installed with — correct image, region, and architecture. Never attempt to discover this via `aws ec2 describe-images`.
+
+### User-provided — must ask the user
+
+| Variable | Description | Example | Used in |
+|---|---|---|---|
+| `CLOUD` | Cloud provider for cert-manager chart: `aws` (Route53 DNS-01) or `none` (bare metal / non-AWS). **Must be confirmed before Phase 1 — do not default.** | `aws` | Phase 1 |
+| `AWS_INSTANCE_TYPE` | GPU instance type | `g5.2xlarge` | Phase 2 |
+| `AWS_INSTANCES_PER_AZ` | GPU nodes per availability zone | `1` | Phase 2 |
+| `RHOAI_OLM_PROFILE` | RHOAI **operator** install preset: `stable` (default) = `stable-3.x`; `ea` = `beta` channel. Verify current CSV via `packagemanifest` before use. Passed to `helm template ./gitops/operators/rhoai --set olmProfile=...` | `stable` | Phase 3 |
+| `HF_TOKEN` | HuggingFace token for gated models | `hf_...` | Phase 5 |
+| `GATEWAY_NAME` | Name for the llm-d gateway | `openshift-ai-inference` | Phase 5, 6 |
+| `PROJECT` | Namespace for llm-d workloads | `llm-d-demo` | Phase 5, 6 |
+
+> **Critical — confirm `CLOUD` before Phase 1:** Setting `CLOUD=aws` enables Route53 DNS-01 certificate issuance; `CLOUD=none` skips cert-manager entirely (bare metal or self-managed TLS). The wrong value causes a silent mis-configuration that is hard to recover from mid-install. **Do not default or assume — ask the user explicitly.**
 
 ---
 
@@ -113,7 +122,7 @@ Collect these before starting. The assistant should ask for any that are missing
 
 ### Phase 0 — Cluster Validation
 Confirm the cluster is ready: OCP 4.21+, cluster admin access, default StorageClass, no ODH or Service Mesh 2.x.
-**Critical:** Collect all environment variables before proceeding.
+**Critical:** Derive auto-derived variables from the cluster (see table above). Ask the user only for the user-provided variables — at minimum `CLOUD` and `AWS_INSTANCE_TYPE` for an AWS install.
 **Full guide:** [docs/phases/00-validation.md](docs/phases/00-validation.md)
 
 ### Phase 1 — ArgoCD + cert-manager + Let's Encrypt
@@ -159,7 +168,9 @@ Deploy the MaaS gateway, configure Authorino TLS, bootstrap the subscription sta
 
 At the beginning of each session, say which tool you use and your phase, for example:
 
-> *"I'm on Phase \<N\> (agent). My env vars: AWS_REGION=... AWS_INSTANCE_TYPE=... [etc.]. Let's continue."*
+> *"I'm on Phase \<N\> (agent). My env vars: CLOUD=aws AWS_INSTANCE_TYPE=g5.2xlarge [etc.]. Let's continue."*
+>
+> Note: `AWS_REGION`, `AMI_ID`, `INFRA_ID`, and `CLUSTER_DOMAIN` are derived from the cluster — the assistant should run the lookup commands rather than asking for them.
 
 If something went wrong, paste the failing command and its output and say which phase you were on. The assistant should diagnose without restarting from scratch.
 
@@ -173,4 +184,6 @@ If something went wrong, paste the failing command and its output and say which 
 - **Never install** Service Mesh 2.x, OpenShift Serverless, or Open Data Hub — these conflict with RHOAI 3.x. Service Mesh 3.x is only in scope if the user explicitly deploys **Llama Stack Operator** (not part of the default llm-d path).
 - **Do NOT install Kueue** unless explicitly required for GPUaaS or distributed workloads — it causes namespace label conflicts with hardware profiles.
 - **Prefer `oc apply -k`** over raw `oc apply -f` for kustomize paths — it respects the overlay ordering. The RHOAI **operator** install is an exception: use `helm template rhoai-operator ./gitops/operators/rhoai | oc apply -f -` (see README §2.5).
+- **Never use `aws ec2 describe-images` to look up `AMI_ID`** — the correct RHCOS AMI is already embedded in the cluster's existing MachineSets; read it with `oc get machineset -n openshift-machine-api -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}'`.
+- **Never ask the user for auto-derived variables** (`AWS_REGION`, `AMI_ID`, `INFRA_ID`, `CLUSTER_DOMAIN`) — always derive them from the cluster using the commands in the Environment Variables table.
 - If a command produces unexpected output, **stop and report** rather than continuing.

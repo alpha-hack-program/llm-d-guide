@@ -63,6 +63,10 @@ Red Hat OpenShift AI (RHOAI) 3.4 is a self-managed AI/ML platform that provides 
 * [Supported Product and Hardware Configurations](https://docs.redhat.com/en/documentation/red_hat_ai/3/html/supported_product_and_hardware_configurations/index)
 * [llm-d Release Component Versions](https://access.redhat.com/articles/7136620)
 
+**Why this guide is structured the way it is:**
+
+This guide installs a layered stack bottom-up: cluster → GPU hardware → core operators → RHOAI → llm-d → MaaS. Each layer is a hard prerequisite for the next. For the reasoning behind every architectural choice — why each operator is needed, why the install order matters, why certain components are deliberately excluded, and how the pieces interact at runtime — see [RATIONALE.md](RATIONALE.md).
+
 ---
 
 ## Using This Guide with Claude Code or OpenCode
@@ -395,17 +399,7 @@ done
 
 **CLI commands:** [Phase 3 — Optional Kueue section](docs/phases/03-operators-rhoai.md#optional--kueue-gpuaas--distributed-workloads-only)
 
-### 3.4 Pipeline Dependencies
-
-| Operator | Channel | Purpose |
-| --- | --- | --- |
-| Red Hat OpenShift Pipelines | `latest` | Tekton pipelines for data science workflows |
-
-> **Note:** The OpenShift Pipelines operator is optional for llm-d. It is required only if you plan to use Data Science Pipelines features in RHOAI.
-
-**CLI commands:** [Phase 3 — Optional Pipelines section](docs/phases/03-operators-rhoai.md#optional--openshift-pipelines-data-science-pipelines-only)
-
-### 3.5 Check Operators
+### 3.4 Check Operators
 
 ```bash
 ./scripts/check-operators.sh
