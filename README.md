@@ -383,6 +383,8 @@ done
 
 > **Note on Service Mesh 3.x:** Install OpenShift Service Mesh 3.x **only** if you intend to use the Llama Stack Operator. It is not a prerequisite for llm-d or base RHOAI model serving.
 
+**Full dependency matrix:** [docs/reference/operator-matrix.md](docs/reference/operator-matrix.md)
+
 **CLI commands:** [Phase 3 — Core Operators + RHOAI](docs/phases/03-operators-rhoai.md)
 
 #### Optional — Red Hat Build of Kueue (GPUaaS / Distributed Workloads only)

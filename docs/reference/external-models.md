@@ -30,7 +30,7 @@ spec:
 
 ---
 # MaaSModelRef MUST have the same name
-apiVersion: maas.opendatahub.io/v1alpha1
+apiVersion: models.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
   name: qwen3-14b              # ← MUST match ExternalModel name exactly

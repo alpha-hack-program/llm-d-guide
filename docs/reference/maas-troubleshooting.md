@@ -83,7 +83,7 @@ Verify: `oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress`
 
 **Correct schema:**
 ```yaml
-apiVersion: maas.opendatahub.io/v1alpha1
+apiVersion: models.opendatahub.io/v1alpha1
 kind: MaaSSubscription
 metadata:
   name: example-subscription

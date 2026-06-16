@@ -77,39 +77,31 @@ oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
 
 > **Note:** Only required if `CLOUD=aws`. Skip this step for bare metal / non-AWS.
 
-**MANDATORY: Validate cluster domain extraction (AWS only):**
-
-Before applying the cert-manager-route53 chart, run the validation script to ensure the cluster
-domain is extracted correctly:
+**MANDATORY: Run the domain validation script now (AWS only):**
 
 ```bash
 ./scripts/validate-cluster-domain.sh
 ```
 
-This script validates by comparing the base domain against the cluster's apps domain:
-- Extracts `dns.config/cluster .spec.baseDomain` (cluster base domain)
-- Extracts `ingresses.config/cluster .spec.domain` (apps domain)
-- Validates that apps domain == `apps.<baseDomain>` (platform-agnostic check)
-- Outputs the correct values to use with the cert-manager-route53 chart
+Do NOT re-implement this logic inline. Run the script and capture its output.
 
-**Critical validation:** The value must match what's actually in the cluster's `dns.config/cluster .spec.baseDomain`
-- If cluster has: baseDomain=`mycluster.example.com`, apps=`apps.mycluster.example.com`
-  - Correct extraction: `mycluster.example.com` (matches cluster)
-  - Wrong extraction: `example.com` (doesn't match — you got the parent domain instead)
+The script checks that the extracted `baseDomain` matches the cluster's actual apps domain
+(`apps.<baseDomain>`), catching the common mistake of extracting a parent domain instead of the
+full cluster base domain. If it fails, stop and fix before proceeding.
 
-If the validation script fails, **stop** and fix the domain extraction before proceeding.
+**CRITICAL — After running the script, output this message verbatim and wait for the user's reply before running any further commands:**
 
-**CRITICAL — Confirm cluster domain with the user:**
+```
+The domain validation script output:
+<paste full script output here>
 
-After running the validation script, **STOP and ask the user to confirm** that the extracted cluster domain is correct:
+The cluster base domain is: <extracted-domain>
+All certificates will be issued for api.<domain> and *.apps.<domain>.
 
-> "The validation script extracted the cluster base domain as: `<extracted-domain>`
-> 
-> Is this correct? This value is CRITICAL for Let's Encrypt certificate issuance. If wrong, certificates will fail to validate and Phase 1 cannot succeed.
-> 
-> Please confirm before I proceed with cert-manager-route53 installation."
+Is this correct? I will not proceed until you confirm.
+```
 
-Do NOT proceed with applying the cert-manager-route53 chart until the user explicitly confirms the domain is correct.
+Do NOT proceed with applying the cert-manager-route53 chart until the user explicitly replies to confirm.
 
 **Route53 zone accessibility check (AWS only):**
 
@@ -144,10 +136,10 @@ echo -e "  [OK]"
 ./scripts/validate-cluster-domain.sh
 
 CLUSTER_DOMAIN=$(oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}')
-AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:=eu-west-1}"
+AWS_DEFAULT_REGION=$(oc get infrastructure cluster -o jsonpath='{.status.platformStatus.aws.region}')
 
 [[ -z "${CLUSTER_DOMAIN}" ]] && { echo "Error: CLUSTER_DOMAIN could not be detected."; exit 1; }
-[[ -z "${AWS_DEFAULT_REGION}" ]] && { echo "Error: AWS_DEFAULT_REGION is not set."; exit 1; }
+[[ -z "${AWS_DEFAULT_REGION}" ]] && { echo "Error: AWS_DEFAULT_REGION could not be detected."; exit 1; }
 
 echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
 echo "AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}"
@@ -175,15 +167,26 @@ helm template gitops/operators/cert-manager-route53 \
 oc get pods -n cert-manager
 # controller, cainjector, webhook — all must show 1/1 Running
 
-# Verify certificates
+# Wait for both certificates to reach Ready state (do not use sleep — use oc wait)
+oc wait --for=condition=Ready certificate/ocp-api -n openshift-config --timeout=300s
+oc wait --for=condition=Ready certificate/ocp-ingress -n openshift-ingress --timeout=300s
+
+# Confirm final status — filter by the Ready condition explicitly.
+# WARNING: conditions[0] is NOT always the Ready condition; using it gives misleading output
+# (e.g. "READY: True" when Issuing is active but cert is NOT done). Use the filter below.
 oc get certificates.cert-manager.io --all-namespaces \
-  -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,STATUS:.status.conditions[0].type,READY:.status.conditions[0].status'
+  -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status'
+
+# If a cert is stuck, check the ACME order and challenge status:
+oc get orders,challenges -n openshift-config
+oc get orders,challenges -n openshift-ingress
 ```
 
-**Human gate:** Every certificate must show `READY=True`. Do not proceed with a cert in `False` or `Unknown` state.
+**Human gate:** Every certificate must show `READY=True` under the `READY` column above. `Issuing` is not done — wait until `Ready=True` for all certs before proceeding. Do not proceed with any cert showing `False` or blank.
 
 **Known gotchas:**
 - The first `helm template | oc apply` will fail on the `CertManager` CR because the operator CRD isn't registered until the CSV reaches `Succeeded`. Wait for `Succeeded`, then re-run the same command — it applies cleanly on the second pass.
 - If using ArgoCD: if the cert-manager webhook is slow to start, the ArgoCD sync may fail on the first attempt. Re-sync after all 3 pods are Running.
+- `oc get orders, challenges` (with a space) is invalid syntax — always use `oc get orders,challenges` (no space).
 
 **End of Phase 1:** Stop here and report certificate status to the user. All certificates must show `READY=True`. Wait for confirmation before proceeding to [Phase 2](02-gpu-nodes.md).

@@ -17,7 +17,7 @@ Do NOT decide this yourself — the number of GPU nodes affects cost and schedul
 1. GPU MachineSets (AWS only) — start node provisioning first so nodes are ready by the time operators finish installing:
    ```bash
    export INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}')
-   export AWS_REGION="${AWS_REGION:=eu-west-1}"
+   export AWS_REGION=$(oc get infrastructure cluster -o jsonpath='{.status.platformStatus.aws.region}')
    export AMI_ID=$(oc get machineset -n openshift-machine-api \
      -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}')
    export AWS_INSTANCE_TYPE="${AWS_INSTANCE_TYPE:=g5.2xlarge}"

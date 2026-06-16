@@ -13,65 +13,9 @@ troubleshooting) is in [`docs/reference/`](docs/reference/).
 
 ---
 
-## Repo Layout
+**Repo layout:** [docs/reference/repo-layout.md](docs/reference/repo-layout.md) — load only if you need to locate a specific chart or directory.
 
-```
-llm-d-guide/
-├── gitops/
-│   ├── operators/
-│   │   ├── connectivity-link/       # Authorino + Limitador (Kuadrant stack)
-│   │   ├── cert-manager-operator/   # cert-manager subscription (GitOps / Helm)
-│   │   ├── cert-manager-route53/    # Let's Encrypt ClusterIssuers + Ingress/API certs
-│   │   ├── nfd/                     # Node Feature Discovery operator subscription
-│   │   ├── nvidia/                  # NVIDIA GPU Operator subscription
-│   │   ├── leader-worker-set/       # LeaderWorkerSet operator (required for llm-d)
-│   │   ├── kueue-operator/          # Red Hat Build of Kueue (OPTIONAL — only for GPUaaS/distributed workloads)
-│   │   ├── rhoai/                   # RHOAI operator OLM subscription (Helm — channel/CSV presets)
-│   │   ├── tempo-operator/          # Distributed tracing
-│   │   ├── opentelemetry-operator/  # OTel collector
-│   │   ├── grafana-operator/        # Optional dashboards
-│   │   └── pipelines/               # OpenShift Pipelines (optional)
-│   └── instance/
-│       ├── nfd/                     # NodeFeatureDiscovery CR
-│       ├── nvidia/                  # ClusterPolicy CR
-│       ├── machine-sets/gpu-worker/ # Helm chart for GPU MachineSets (AWS)
-│       ├── rhoai/                   # DSCInitialization + DataScienceCluster Helm chart
-│       ├── llm-d/
-│       │   ├── gateway/             # GatewayClass + Gateway Helm chart
-│       │   └── inference/           # LLMInferenceService Helm chart
-│       ├── llm-d-monitoring/        # Prometheus + Grafana for llm-d metrics
-│       └── maas/
-│           ├── connectivity-link/   # Kuadrant CR (kuadrant-system namespace + Kuadrant instance)
-│           ├── gateway/             # GatewayClass + maas-default-gateway Helm chart
-│           ├── rbac/                # OpenShift Groups for MaaS subscription-based access control
-│           ├── database/            # MaaS API backing store
-│           └── monitoring/          # Grafana dashboards + Prometheus rules for MaaS
-├── metallb/                         # MetalLB config (bare metal only)
-├── scripts/
-│   ├── check-operators.sh           # Validates all required operators are Succeeded
-│   └── preflight-validation.sh      # Pre-flight cluster checks with pass/fail summary
-├── docs/
-│   ├── phases/                      # Step-by-step phase guides (loaded on demand)
-│   └── reference/                   # Validation commands, MaaS troubleshooting
-└── README.md                        # Full installation guide
-```
-
----
-
-## Operator Dependency Matrix
-
-| Operator | llm-d | GPUaaS / Distributed Workloads | Notes |
-|---|---|---|---|
-| **Connectivity Link** (Authorino + Limitador) | Required | Required | KServe auth, llm-d gateway, MaaS; Authorino is the token-auth piece. Installing the operator alone is not enough — a `Kuadrant` CR must also be created in `kuadrant-system` (`gitops/instance/maas/connectivity-link`) to deploy the actual operands. |
-| **LeaderWorkerSet** | Required | Required | Multi-node MoE and P/D disaggregation |
-| **Red Hat Build of Kueue** | Not required | Required | Do NOT install for llm-d-only setups — causes namespace label conflicts |
-| **NFD + NVIDIA GPU Operator** | Required | Required | GPU node detection and drivers |
-| **cert-manager** (Operator for Red Hat OpenShift) | Recommended | Recommended | Automates TLS for RHOAI, llm-d, OTel, and related components; manual certs are valid if you manage them yourself |
-
-> **Important:** Installing the Kueue operator (even with `managementState: Removed` in the DSC)
-> causes the RHOAI dashboard to label every new project with `kueue.openshift.io/managed=true`.
-> This makes hardware profiles with `scheduling.type: Node` invisible in those projects.
-> Only install Kueue if you specifically need GPUaaS or distributed workload queue management.
+**Operator dependencies:** [docs/reference/operator-matrix.md](docs/reference/operator-matrix.md) — load at Phase 3 if you need to verify what is required. Key rule: **do NOT install Kueue** unless explicitly required (see Constraints below).
 
 ---
 
@@ -127,7 +71,10 @@ Confirm the cluster is ready: OCP 4.21+, cluster admin access, default StorageCl
 
 ### Phase 1 — ArgoCD + cert-manager + Let's Encrypt
 Install GitOps operator and automate TLS certificate lifecycle.
-**Critical:** Ask the user `cloud=aws` or `cloud=none` before applying. First `helm template | oc apply` will fail on the `CertManager` CR — wait for CSV `Succeeded`, then re-run.
+**Critical:**
+- Ask the user `cloud=aws` or `cloud=none` before applying. First `helm template | oc apply` will fail on the `CertManager` CR — wait for CSV `Succeeded`, then re-run.
+- For `cloud=aws`: run `./scripts/validate-cluster-domain.sh` (mandatory) and **stop to confirm the extracted domain with the user** before applying the cert-manager-route53 chart — a wrong domain causes silent Let's Encrypt failures.
+- The human gate requires all certificates to show `READY=True` in the verify command output — `Issuing` means the cert is not done yet; wait until `Ready`.
 **Full guide:** [docs/phases/01-argocd-certs.md](docs/phases/01-argocd-certs.md)
 
 ### Phase 2 — GPU Nodes + NFD + NVIDIA GPU Operator
@@ -138,6 +85,7 @@ Add GPU worker nodes and install hardware detection and driver stack.
 ### Phase 3 — Core Operators + RHOAI
 Install Connectivity Link, LeaderWorkerSet, and RHOAI, then configure the DataScienceCluster.
 **Critical:** Do NOT install Kueue unless explicitly required. `modelsAsService` must be `false` during this phase. Apply connectivity-link first — Authorino must be running before RHOAI.
+**Kuadrant `Ready: False` is expected at end of Phase 3** — the GatewayClass Kuadrant needs is created in Phase 5. Do not search the marketplace. Proceed to Phase 4; Phase 5 creates the GatewayClass and restarts the Kuadrant operator pod to force reconciliation.
 **Full guide:** [docs/phases/03-operators-rhoai.md](docs/phases/03-operators-rhoai.md)
 
 ### Phase 4 — Monitoring Stack
@@ -158,6 +106,8 @@ Deploy the MaaS gateway, configure Authorino TLS, bootstrap the subscription sta
 
 ## Reference
 
+- [Repo Layout](docs/reference/repo-layout.md) — chart and directory map (load only when locating a path)
+- [Operator Matrix](docs/reference/operator-matrix.md) — what is required vs optional per workload type (load at Phase 3)
 - [Validation Commands](docs/reference/validation.md) — `oc get` checks for operators, CRDs, gateways, MaaS
 - [MaaS Troubleshooting](docs/reference/maas-troubleshooting.md) — Key facts, gotchas, token rate limiting, dashboard flags
 - [ExternalModel Guide](docs/reference/external-models.md) — Credential injection, MaaSModelRef naming, monitoring
@@ -186,4 +136,6 @@ If something went wrong, paste the failing command and its output and say which 
 - **Prefer `oc apply -k`** over raw `oc apply -f` for kustomize paths — it respects the overlay ordering. The RHOAI **operator** install is an exception: use `helm template rhoai-operator ./gitops/operators/rhoai | oc apply -f -` (see README §2.5).
 - **Never use `aws ec2 describe-images` to look up `AMI_ID`** — the correct RHCOS AMI is already embedded in the cluster's existing MachineSets; read it with `oc get machineset -n openshift-machine-api -o jsonpath='{.items[0].spec.template.spec.providerSpec.value.ami.id}'`.
 - **Never ask the user for auto-derived variables** (`AWS_REGION`, `AMI_ID`, `INFRA_ID`, `CLUSTER_DOMAIN`) — always derive them from the cluster using the commands in the Environment Variables table.
+- **Always run `./scripts/validate-cluster-domain.sh`** (do not just read it) before applying the cert-manager-route53 chart, and stop to confirm the extracted domain with the user before proceeding.
+- **Never re-implement script logic inline** — if a named script exists for a task (e.g. `preflight-validation.sh`, `validate-cluster-domain.sh`), run it. Do not substitute your own commands.
 - If a command produces unexpected output, **stop and report** rather than continuing.

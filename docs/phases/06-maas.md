@@ -9,8 +9,12 @@
 
 **Pre-flight checks the assistant must run before starting:**
 ```bash
-# Kuadrant CR ready (Authorino + Limitador running)
+# Kuadrant CR must be Ready: True — if not, AuthPolicies will all be Accepted: False
+# and the smoke test will fail with AUTH_FAILURE / "Missing or empty username header"
 oc get kuadrant kuadrant -n kuadrant-system
+# If Ready: False, restart the Kuadrant operator before proceeding:
+#   oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
+#   oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
 oc get pods -n kuadrant-system
 
 # LLMInferenceService(s) Ready
@@ -142,18 +146,13 @@ spec:
 EOF
 ```
 
-**Inject the DB connection URL into the maas-api deployment:**
+**Verify maas-api is reading the database secret:**
 ```bash
-oc patch deployment maas-api -n redhat-ods-applications --type=json -p='[{
-  "op": "add",
-  "path": "/spec/template/spec/containers/0/env/-",
-  "value": {
-    "name": "DB_CONNECTION_URL",
-    "valueFrom": {"secretKeyRef": {"name": "maas-db-config", "key": "DB_CONNECTION_URL"}}
-  }
-}]'
-oc rollout status deployment/maas-api -n redhat-ods-applications --timeout=60s
+oc wait --for=condition=available deployment/maas-api \
+  -n redhat-ods-applications --timeout=120s
 ```
+
+> RHOAI wires `DB_CONNECTION_URL` from the `maas-db-config` secret automatically when it creates the `maas-api` deployment. No manual patching is needed. If `modelsAsService` was already `Managed` before the secret existed (wrong order), run `oc rollout restart deployment/maas-api -n redhat-ods-applications` — do not patch the deployment, as RHOAI's reconciliation loop will overwrite any manual env var changes.
 
 ### Step 6 — Register models
 
@@ -165,7 +164,7 @@ oc get maasmodelref -n <model-namespace>
 
 # Create MaaSSubscription (token rate limits per model, per group)
 cat <<'EOF' | oc apply -f -
-apiVersion: maas.opendatahub.io/v1alpha1
+apiVersion: models.opendatahub.io/v1alpha1
 kind: MaaSSubscription
 metadata:
   name: default-subscription
@@ -173,7 +172,8 @@ metadata:
 spec:
   owner:
     groups:
-    - name: system:authenticated    # MUST be an object with 'name' field, not a bare string
+    - kind: Group
+      name: system:authenticated    # Each entry requires kind: Group + name
   modelRefs:
   - name: qwen3-8b-maas             # MaaSModelRef name (not LLMInferenceService name)
     namespace: llm-d-demo
@@ -184,7 +184,7 @@ EOF
 
 # Create MaaSAuthPolicy (grants groups access to models)
 cat <<'EOF' | oc apply -f -
-apiVersion: maas.opendatahub.io/v1alpha1
+apiVersion: models.opendatahub.io/v1alpha1
 kind: MaaSAuthPolicy
 metadata:
   name: default-auth-policy
@@ -200,7 +200,8 @@ EOF
 ```
 
 **Critical schema notes:**
-- `owner.groups` is a **list of objects** with `name` field, NOT a list of strings
+- `MaaSSubscription` and `MaaSAuthPolicy` use `apiVersion: models.opendatahub.io/v1alpha1`; `Tenant` and `ExternalModel` use `maas.opendatahub.io/v1alpha1`
+- `owner.groups` is a **list of objects** with `kind: Group` + `name`, NOT a list of strings
 - `tokenRateLimits` is **required on each modelRef**, with `window` and `limit` fields
 - `window` units: `s`, `m`, `h` only — `d` is not supported, use `24h`
 - `subjects.groups` in MaaSAuthPolicy must match `owner.groups` in MaaSSubscription
@@ -234,7 +235,17 @@ curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
 
 ## Known gotchas
 
-- `POST /maas-api/v1/api-keys` returns `500`: Authorino TLS not configured, or the `maas-default-gateway-authn-ssl` EnvoyFilter is missing. Remove and re-add the `authorino-tls-bootstrap` annotation on the gateway (Step 4 above).
+- **`AUTH_FAILURE` on `POST /maas-api/v1/api-keys` — `"Missing or empty username header"`:** When Kuadrant AuthPolicies are `Accepted: False`, Envoy bypasses Authorino entirely — requests reach maas-api with no auth headers injected, so `X-MaaS-Username` is always missing. The fix is ALWAYS the Kuadrant operator restart — do NOT debug TLS, kubernetesTokenReview audiences, or patch the AuthPolicy directly:
+  ```bash
+  # Confirm AuthPolicies are Accepted: False:
+  oc get authpolicy -A -o custom-columns="NS:.metadata.namespace,NAME:.metadata.name,ACCEPTED:.status.conditions[?(@.type==\"Accepted\")].status"
+  # Restart the Kuadrant operator and wait:
+  oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
+  oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
+  # Retry the smoke test.
+  ```
+  > **Do NOT patch `maas-api-auth-policy` or `maas-auth-*` AuthPolicies** — they are managed by the maas-controller and any manual patches are overwritten on next reconciliation. The `kubernetesTokenReview.audiences` and TLS config in those policies are correct; only Kuadrant needs a restart to enforce them.
+- `POST /maas-api/v1/api-keys` returns `500` (exception, not auth failure): Authorino TLS not configured, or the `maas-default-gateway-authn-ssl` EnvoyFilter is missing. Remove and re-add the `authorino-tls-bootstrap` annotation on the gateway (Step 4 above).
 - **500 errors on API keys / authorization policies pages** — gateway OCP Route has wrong hostname. Check: `oc get route maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.host}'` must be `maas.<cluster-domain>`. If it shows `maas-default-gateway-openshift-ingress.<cluster-domain>`, re-apply the gateway chart (the chart had a bug where `useOpenShiftRoute=true` used the wrong hostname format). Symptom in `maas-ui` sidecar logs: `statusCode=503 ... invalid character '<'`.
 - Gen AI studio → API keys or Settings → Authorization policies tabs missing in the dashboard: check all four `OdhDashboardConfig` flags — `vLLMDeploymentOnMaaS` is the most commonly missing one.
 - `LLMInferenceService` `HTTPRoutesReady: False` — `NotAllowedByListeners`: model namespace not in `gateway.modelNamespaces`. Re-apply the gateway chart with the correct namespace set.

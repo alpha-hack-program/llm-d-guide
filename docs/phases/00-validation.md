@@ -5,7 +5,13 @@
 
 **Goal:** Confirm the cluster is ready before installing anything.
 
-**The assistant should run these checks and report any failures:**
+**Run the preflight script first — it covers all required checks:**
+
+```bash
+./scripts/preflight-validation.sh
+```
+
+If any check fails, use these individual commands to diagnose:
 
 ```bash
 # OCP version — must be 4.21+

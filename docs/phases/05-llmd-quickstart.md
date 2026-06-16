@@ -75,11 +75,20 @@ helm template gitops/instance/llm-d/gateway \
 
 > **Gateway TLS:** if Let's Encrypt `ingress-certs` already exists in `openshift-ingress` (Phase 1 complete), use `--set tls.secretName=ingress-certs` — no need to generate a new cert.
 
-Verify the Gateway is ready:
+Verify the Gateway is ready and confirm Kuadrant has reconciled:
 
 ```bash
 oc get gateway -n openshift-ingress
 # Expected: openshift-ai-inference   openshift-ai-inference-class   True   ...
+
+# The GatewayClass created above resolves the Phase 3 Kuadrant pending state.
+# The Kuadrant operator must detect the new GatewayClass — it does NOT watch passively,
+# it requires a pod restart to pick it up. Wait 60s first; if still not Ready, restart:
+oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=60s || \
+  oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
+oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
+# Expected: condition met
+# If it still does not reach Ready after the restart, check: oc get kuadrant -n kuadrant-system -o yaml
 ```
 
 ### Step 2 — Create Namespace

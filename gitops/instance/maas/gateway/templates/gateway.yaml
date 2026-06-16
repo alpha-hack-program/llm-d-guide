@@ -8,9 +8,12 @@ metadata:
   namespace: {{ .Values.gateway.namespace }}
 data:
   service: |
-    metadata:
-      annotations:
-        service.beta.openshift.io/serving-cert-secret-name: "{{ .Values.tls.secretName }}"
+    ## serving-cert-secret-name removed: the service-ca-operator may overwrite
+    ## an existing cert (ingress-certs, router-certs-default) with an internal-only
+    ## cert, breaking external TLS. The Gateway listener's certificateRefs is sufficient.
+    # metadata:
+    #   annotations:
+    #     service.beta.openshift.io/serving-cert-secret-name: "{{ .Values.tls.secretName }}"
     spec:
       type: ClusterIP
 {{- end }}
