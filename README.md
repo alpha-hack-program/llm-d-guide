@@ -197,6 +197,8 @@ Set `CLOUD` to **aws** when running on AWS, or **none** for bare metal / non-AWS
 
 > **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reaches `Succeeded`. This is expected. Wait for the CSV, then re-run — it applies cleanly on the second pass.
 
+> **Local CA for non-AWS / bare metal (`cloud=none`):** When Let's Encrypt is not available (no public DNS, lab environments), use the `cert-manager-local-ca` chart to create a local CA chain that issues properly signed certificates for the cluster's API and ingress endpoints. The CA must be injected into the cluster trust bundle afterwards. See [Phase 1 — Local CA alternative](docs/phases/01-tls-cert-automation.md#step-3--alternative-local-ca-non-aws--bare-metal) for the full procedure.
+
 **CLI commands:** [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation.md)
 
 <details>

@@ -54,6 +54,10 @@ spec:
     group: cert-manager.io
     kind: ClusterIssuer
     name: letsencrypt
+  {{- else if eq .Values.tls.issuerName "local-ca" }}
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: local-ca
   {{- else }}
     kind: Issuer
     name: {{ .Values.tls.issuerName }}

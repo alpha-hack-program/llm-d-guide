@@ -75,7 +75,8 @@ oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
 
 ### Step 3 — Let's Encrypt Cluster Issuers and Certificates
 
-> **Note:** Only required if `CLOUD=aws`. Skip this step for bare metal / non-AWS.
+> **Note:** Only required if `CLOUD=aws`. For bare metal / non-AWS, skip to
+> [Step 3 — Alternative: Local CA](#step-3--alternative-local-ca-non-aws--bare-metal) below.
 
 **MANDATORY: Run the domain validation script now (AWS only):**
 
@@ -157,6 +158,78 @@ helm template gitops/operators/cert-manager-route53 \
 > **Alternative — ArgoCD Application:** If using ArgoCD instead of CLI, see the
 > [ArgoCD option in README §3.1](../../README.md#31-cert-manager-operator-and-lets-encrypt-certificate-issuer)
 > for the ClusterRole, ClusterRoleBinding, and Application YAML.
+
+---
+
+### Step 3 — Alternative: Local CA (non-AWS / bare metal)
+
+> **Note:** Use this step instead of Step 3 (Let's Encrypt) when `CLOUD=none` — i.e., bare metal,
+> non-AWS clouds, or lab/demo environments without public DNS. This creates a local CA chain
+> using cert-manager: a self-signed root bootstraps a CA certificate, which then issues
+> properly signed certs for the cluster's API and ingress endpoints.
+
+**Wait for cert-manager pods to be ready:**
+
+```bash
+echo -n "Waiting for cert-manager pods to be ready..."
+while [[ $(oc get pods -l app.kubernetes.io/instance=cert-manager -n cert-manager \
+  -o 'jsonpath={..status.conditions[?(@.type=="Ready")].status}') != "True True True" ]]; do
+  echo -n "." && sleep 1
+done
+echo -e "  [OK]"
+```
+
+**Extract the cluster base domain:**
+
+```bash
+CLUSTER_DOMAIN=$(oc get dns.config/cluster -o jsonpath='{.spec.baseDomain}')
+[[ -z "${CLUSTER_DOMAIN}" ]] && { echo "Error: CLUSTER_DOMAIN could not be detected."; exit 1; }
+echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
+echo "Certificates will be issued for api.${CLUSTER_DOMAIN} and *.apps.${CLUSTER_DOMAIN}"
+```
+
+**Apply the local CA chart:**
+
+```bash
+helm template gitops/operators/cert-manager-local-ca \
+  --name-template cert-manager-local-ca \
+  --set clusterDomain="${CLUSTER_DOMAIN}" | oc apply -f -
+```
+
+This creates:
+1. `selfsigned-issuer` (ClusterIssuer) — bootstraps the CA key material
+2. `selfsigned-ca` (Certificate in `cert-manager` namespace) — the CA cert (ECDSA P-256)
+3. `local-ca` (ClusterIssuer) — issues certs signed by the local CA
+4. `ocp-ingress` (Certificate) — `*.apps.<cluster>`, secret `ingress-certs`
+5. `ocp-api` (Certificate) — `api.<cluster>`, secret `api-certs`
+
+**Inject the CA into the cluster trust bundle:**
+
+This step is **mandatory** — without it, cluster components (including the MaaS `maas-ui` sidecar)
+will reject the locally-signed certificates. See [Appendix D](../../README.md#appendix-d--maas-with-self-signed-tls-certificates) for details.
+
+```bash
+# Wait for the CA secret to be populated
+oc wait --for=condition=Ready certificate/selfsigned-ca -n cert-manager --timeout=120s
+
+# Extract the CA certificate
+oc get secret cert-manager-ca -n cert-manager \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/local-ca.crt
+
+# Create (or update) the cluster trust bundle ConfigMap
+oc create configmap user-ca-bundle -n openshift-config \
+  --from-file=ca-bundle.crt=/tmp/local-ca.crt \
+  --dry-run=client -o yaml | oc apply -f -
+
+# Tell the cluster to trust this CA
+oc patch proxy/cluster --type=merge \
+  -p '{"spec":{"trustedCA":{"name":"user-ca-bundle"}}}'
+```
+
+> **What this does:** The `user-ca-bundle` ConfigMap is the standard OpenShift mechanism for
+> adding private/corporate CAs to the cluster-wide trust store. RHOAI automatically merges it
+> into the `odh-trusted-ca-bundle` and `odh-ca-bundle` ConfigMaps mounted by its components —
+> including `maas-ui`, which validates TLS when calling the MaaS API.
 
 ---
 

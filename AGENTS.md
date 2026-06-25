@@ -78,6 +78,7 @@ Install cert-manager operator and automate TLS certificate lifecycle.
 **Critical:**
 - Ask the user `cloud=aws` or `cloud=none` before applying. First `helm template | oc apply` will fail on the `CertManager` CR — wait for CSV `Succeeded`, then re-run.
 - For `cloud=aws`: run `./scripts/validate-cluster-domain.sh` (mandatory) and **stop to confirm the extracted domain with the user** before applying the cert-manager-route53 chart — a wrong domain causes silent Let's Encrypt failures.
+- For `cloud=none`: offer the **local CA** path (Step 3 Alternative in the Phase 1 guide) — it creates a local CA chain via cert-manager that issues properly signed certificates. After applying, the CA must be injected into the cluster trust bundle (`user-ca-bundle` ConfigMap + Proxy patch). This is mandatory for MaaS dashboard compatibility.
 - The human gate requires all certificates to show `READY=True` in the verify command output — `Issuing` means the cert is not done yet; wait until `Ready`.
 **Full guide:** [docs/phases/01-tls-cert-automation.md](docs/phases/01-tls-cert-automation.md)
 

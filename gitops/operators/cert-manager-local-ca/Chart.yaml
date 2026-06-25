@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cert-manager-local-ca
+description: A Helm chart to configure cert-manager with a local CA for OpenShift (non-AWS / bare metal)
+
+type: application
+
+version: 0.1.0
+
+appVersion: "1.16.0"

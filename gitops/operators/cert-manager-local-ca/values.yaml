@@ -1,0 +1,16 @@
+# Default values for cert-manager-local-ca.
+#
+# Creates a local CA chain: selfsigned bootstrap → CA certificate → local-ca ClusterIssuer,
+# then issues wildcard ingress and API server certificates signed by the local CA.
+#
+# After applying, inject the CA into the cluster trust bundle:
+#   oc get secret cert-manager-ca -n cert-manager -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/local-ca.crt
+#   oc create configmap user-ca-bundle -n openshift-config --from-file=ca-bundle.crt=/tmp/local-ca.crt --dry-run=client -o yaml | oc apply -f -
+#   oc patch proxy/cluster --type=merge -p '{"spec":{"trustedCA":{"name":"user-ca-bundle"}}}'
+#
+# CRITICAL: clusterDomain must be the cluster BASE DOMAIN (from dns.config/cluster spec.baseDomain),
+# NOT the apps ingress domain. The chart generates:
+#   - API cert:     api.<clusterDomain>
+#   - Ingress cert: apps.<clusterDomain> + *.apps.<clusterDomain>
+
+clusterDomain: ""

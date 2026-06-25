@@ -37,10 +37,11 @@ tls:
   # false → the secret must already exist.
   generate: false
   # Cert-manager issuer to use when generate=true.
-  # "selfsigned"  → create a self-signed Issuer in the gateway namespace.
-  # "letsencrypt" → use the letsencrypt ClusterIssuer (requires DNS).
+  # "local-ca"    → use the local-ca ClusterIssuer (from cert-manager-local-ca chart).
+  # "letsencrypt" → use the letsencrypt ClusterIssuer (from cert-manager-route53 chart).
+  # "selfsigned"  → create a raw self-signed Issuer in the gateway namespace (not recommended).
   # any other name → reference an existing Issuer in the gateway namespace.
-  issuerName: "selfsigned"
+  issuerName: "local-ca"
 
 route:
   # TLS termination mode for the OpenShift Route (only used when useOpenShiftRoute=true).

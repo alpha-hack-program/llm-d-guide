@@ -1,0 +1,16 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ocp-api
+  namespace: openshift-config
+spec:
+  isCA: false
+  commonName: "api.{{ .Values.clusterDomain }}"
+  dnsNames:
+  - "api.{{ .Values.clusterDomain }}"
+  issuerRef:
+    name: local-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
+  secretName: api-certs

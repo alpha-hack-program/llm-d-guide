@@ -1,0 +1,17 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ocp-ingress
+  namespace: openshift-ingress
+spec:
+  isCA: false
+  commonName: "apps.{{ .Values.clusterDomain }}"
+  dnsNames:
+  - "apps.{{ .Values.clusterDomain }}"
+  - "*.apps.{{ .Values.clusterDomain }}"
+  issuerRef:
+    name: local-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
+  secretName: ingress-certs

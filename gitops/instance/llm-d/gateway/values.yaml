@@ -17,6 +17,7 @@ tls:
   # service CA annotation or provided externally).
   generate: false
   # Name of the cert-manager Issuer to use.
-  # Set to "selfsigned" to create a self-signed Issuer + Certificate.
-  # Set to "letsencrypt" to use the letsencrypt ClusterIssuer.
-  issuerName: "selfsigned"
+  # Set to "local-ca" to use the local-ca ClusterIssuer (from cert-manager-local-ca chart).
+  # Set to "letsencrypt" to use the letsencrypt ClusterIssuer (from cert-manager-route53 chart).
+  # Set to "selfsigned" to create a raw self-signed Issuer + Certificate (not recommended).
+  issuerName: "local-ca"
