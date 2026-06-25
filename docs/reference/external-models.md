@@ -1,6 +1,6 @@
 # ExternalModel — Credential Injection
 
-> Part of the [llm-d-demo Co-pilot Runbook](../../AGENTS.md). Reference material for
+> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). Reference material for
 > [Phase 6 — MaaS](../phases/06-maas.md).
 
 An `ExternalModel` CR points the MaaS gateway at any OpenAI-compatible endpoint. The

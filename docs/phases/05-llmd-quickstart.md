@@ -1,6 +1,6 @@
 # Phase 5 — llm-d Quick Start
 
-> Part of the [llm-d-demo Co-pilot Runbook](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
 **Goal:** Deploy the gateway, a namespace, and an LLMInferenceService, then test the endpoint.
@@ -113,6 +113,8 @@ deploymentType: intelligent-inference
 serviceName: qwen3-8b
 replicas: 2
 useStartupProbe: true
+hardwareProfile:
+  name: gpu-profile
 storage:
   type: oci
   uri: oci://registry.redhat.io/rhelai1/modelcar-qwen3-8b-fp8-dynamic:1.5
@@ -121,9 +123,11 @@ model:
 resources:
   limits: { cpu: "4", memory: 16Gi, gpuCount: "1" }
   requests: { cpu: "1", memory: 8Gi, gpuCount: "1" }
-env:
-  - name: VLLM_ADDITIONAL_ARGS
-    value: "--disable-uvicorn-access-log --enable-auto-tool-choice --tool-call-parser hermes"
+vllm:
+  extraArgs:
+    - "--disable-uvicorn-access-log"
+    - "--enable-auto-tool-choice"
+    - "--tool-call-parser=hermes"
 EOF
 
 helm template qwen3-8b gitops/instance/llm-d/inference \
@@ -218,6 +222,9 @@ curl -s -X POST https://${INFERENCE_URL}/${PROJECT}/qwen3-8b/v1/chat/completions
 
 ### Step 6 — Deploy Monitoring
 
+> If you completed Phase 4, UWM, COO, and the UIPlugins are already in place — skip to the
+> dashboard apply. If not, follow Phase 4 Steps 1–3 first, then return here.
+
 ```bash
 # Enable User Workload Monitoring (if not already enabled)
 cat <<EOF | oc apply -f -
@@ -237,11 +244,31 @@ oc get pods -n openshift-user-workload-monitoring -w
 # Install Cluster Observability Operator
 oc apply -k gitops/operators/cluster-observability-operator
 
+# Enable Perses dashboards in the console (required for the Perses tab to appear)
+cat <<EOF | oc apply -f -
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: dashboards
+spec:
+  type: Dashboards
+---
+apiVersion: observability.openshift.io/v1alpha1
+kind: UIPlugin
+metadata:
+  name: monitoring
+spec:
+  type: Monitoring
+  monitoring:
+    perses:
+      enabled: true
+EOF
+
 # Deploy Perses dashboard
 oc apply -f gitops/instance/llm-d-observability/perses-dashboard-intelligent-inference.yaml
 ```
 
-**Access:** OpenShift Console → **Observe** → **Dashboards** (Perses tab) → **"llm-d Intelligent Inference"**
+**Access:** OpenShift Console → **Observe** → **Dashboards (Perses)** → **"llm-d Intelligent Inference"**
 
 For complete setup, troubleshooting, and metrics reference, see:
 [gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md](../../gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md)
@@ -268,7 +295,7 @@ For detailed explanation, see: [llm-d Intelligent Routing Verification Guide](..
 - If the Gateway is not `PROGRAMMED=True`, check that Connectivity Link / Authorino is Running and the `GatewayClass` CR was created.
 - If the LLMInferenceService is stuck `Not Ready`, describe it: `oc describe llminferenceservice <name> -n <namespace>` and check events.
 - If `HTTPRoutesReady: False` with `NotAllowedByListeners`: the model namespace is missing from the MaaS gateway's `allowedRoutes`. Re-apply the gateway chart with `--set "gateway.modelNamespaces={<namespace>}"` (see README §9.2).
-- **Hardware profile name:** The admission webhook `hardwareprofile-llmisvc-injector.opendatahub.io` validates the profile name against existing `HardwareProfile` CRs in `redhat-ods-applications`. The chart in `gitops/instance/rhoai` creates three profiles: `gpu-profile`, `gpu-kueue-profile`, and `nvidia-a10g-profile`. The pre-existing `qwen3-8b-values.yaml` references `nvidia-a10g-profile`. Verify available profiles with `oc get hardwareprofile -n redhat-ods-applications` before applying the inference chart.
+- **Hardware profile name:** The admission webhook `hardwareprofile-llmisvc-injector.opendatahub.io` validates the profile name against existing `HardwareProfile` CRs in `redhat-ods-applications`. The chart in `gitops/instance/rhoai` creates three profiles: `gpu-profile`, `gpu-kueue-profile`, and `nvidia-a10g-profile`. The default is `gpu-profile` (auto-selected when `gpuCount > 0`); the pre-existing `qwen3-8b-values.yaml` also uses `gpu-profile`. Verify available profiles with `oc get hardwareprofile -n redhat-ods-applications` before applying the inference chart.
   - `gpu-profile` — generic GPU, `scheduling.type: Node`, GPU toleration only, no Kueue dependency.
   - `gpu-kueue-profile` — `scheduling.type: Queue`; requires Kueue and a `LocalQueue` named `default` in the workload namespace.
   - `nvidia-a10g-profile` — `scheduling.type: Node` with `nodeSelector: nvidia.com/gpu.product: NVIDIA-A10G`; use on mixed-GPU clusters to pin to A10G nodes.
@@ -279,6 +306,8 @@ For detailed explanation, see: [llm-d Intelligent Routing Verification Guide](..
 - For OCI model images (`registry.redhat.io/rhelai1/...`), ensure the cluster pull secret includes Red Hat registry credentials.
 - For MoE models (DeepSeek-R1, Mixtral), use the **Wide Expert-Parallelism** well-lit path which requires LeaderWorkerSet for multi-node orchestration.
 - **Model Registry / model-catalog API 500:** If migrations did not apply, restart model-catalog: `oc rollout restart deployment/model-catalog -n rhoai-model-registries` (README Appendix B).
+- **Duplicate `VLLM_ADDITIONAL_ARGS` env var:** The inference chart auto-generates `VLLM_ADDITIONAL_ARGS` from `vllm.extraArgs`. Setting it again via `env` causes a duplicate-env admission error. Always use `vllm.extraArgs` in per-model values files instead of `env: [{name: VLLM_ADDITIONAL_ARGS, ...}]`.
+- **Perses dashboards not visible in the console:** Three requirements must all be met: (1) a `UIPlugin` CR of type `Dashboards` must exist, (2) a `UIPlugin` CR of type `Monitoring` with `monitoring.perses.enabled: true` must exist, and (3) `PersesDashboard` CRs must be in the `openshift-cluster-observability-operator` namespace with label `app.kubernetes.io/part-of: monitoring`. Missing any one causes the dashboards to silently not appear.
 
 ---
 

@@ -1,6 +1,6 @@
 # MaaS — Key Facts and Gotchas
 
-> Part of the [llm-d-demo Co-pilot Runbook](../../AGENTS.md). Reference material for
+> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). Reference material for
 > [Phase 6 — MaaS](../phases/06-maas.md).
 
 ## `modelsAsService` ordering
@@ -39,7 +39,7 @@ or HTTPRoutes are rejected with `NotAllowedByListeners`. Add namespaces via:
 helm template gitops/instance/maas/gateway --name-template maas-gateway \
   --set clusterDomain="${CLUSTER_DOMAIN}" \
   --set useOpenShiftRoute=true \
-  --set tls.secretName=router-certs-default \
+  --set tls.secretName=ingress-certs \
   --set "gateway.modelNamespaces={llm-d-demo,other-ns}" | oc apply -f -
 ```
 
@@ -83,7 +83,7 @@ Verify: `oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress`
 
 **Correct schema:**
 ```yaml
-apiVersion: models.opendatahub.io/v1alpha1
+apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSSubscription
 metadata:
   name: example-subscription

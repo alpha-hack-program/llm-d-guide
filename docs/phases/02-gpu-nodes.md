@@ -1,6 +1,6 @@
 # Phase 2 — GPU Nodes + NFD + NVIDIA GPU Operator
 
-> Part of the [llm-d-demo Co-pilot Runbook](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
 **Goal:** Add GPU worker nodes and install the hardware detection and driver stack.

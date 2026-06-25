@@ -96,7 +96,7 @@ This repository includes an [`AGENTS.md`](AGENTS.md) file that gives Claude Code
 | Phase | What happens | Approx. time |
 | --- | --- | --- |
 | 0 | Cluster validation (OCP version, admin access, StorageClass, no conflicting operators) | 5 min |
-| 1 | ArgoCD + cert-manager + Let's Encrypt certificates for Ingress and API | 15–20 min |
+| 1 | TLS Certificate Automation — cert-manager + Let's Encrypt for Ingress and API | 15–20 min |
 | 2 | GPU nodes (AWS MachineSets), Node Feature Discovery, NVIDIA GPU Operator | 20–40 min |
 | 3 | Connectivity Link, Leader Worker Set, RHOAI operator, DataScienceCluster | 20–30 min |
 | 4 | Monitoring stack — Tempo, OpenTelemetry, Grafana | 10 min |
@@ -172,7 +172,7 @@ You can instead edit `gitops/operators/rhoai/values.yaml` (`olmProfile` or expli
 RHOAI 3.4 requires several operators installed **before** creating the DataScienceCluster. Install them via **Operators → OperatorHub** in the web console or via CLI Subscription objects.
 
 > **Step-by-step CLI commands** for each section are in the phase guides:
-> - [Phase 1 — ArgoCD + cert-manager + Let's Encrypt](docs/phases/01-argocd-certs.md)
+> - [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation.md)
 > - [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes.md)
 > - [Phase 3 — Core Operators + RHOAI](docs/phases/03-operators-rhoai.md)
 > - [Phase 4 — Monitoring](docs/phases/04-monitoring.md)
@@ -185,7 +185,7 @@ RHOAI 3.4 requires several operators installed **before** creating the DataScien
 
 Optional. Not required if applying manifests directly with `helm template | oc apply`.
 
-**CLI commands:** [Phase 1 — ArgoCD + cert-manager](docs/phases/01-argocd-certs.md)
+**CLI commands:** [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation.md)
 
 ### 3.1 Cert-Manager Operator and Let's Encrypt Certificate Issuer
 
@@ -197,7 +197,7 @@ Set `CLOUD` to **aws** when running on AWS, or **none** for bare metal / non-AWS
 
 > **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reaches `Succeeded`. This is expected. Wait for the CSV, then re-run — it applies cleanly on the second pass.
 
-**CLI commands:** [Phase 1 — ArgoCD + cert-manager](docs/phases/01-argocd-certs.md)
+**CLI commands:** [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation.md)
 
 <details>
 <summary><strong>Alternative — ArgoCD Application</strong></summary>
@@ -1632,7 +1632,7 @@ with wait conditions and human gates:
 | Phase | Guide | Approx. time |
 |---|---|---|
 | 0 — Cluster Validation | [docs/phases/00-validation.md](docs/phases/00-validation.md) | 5 min |
-| 1 — ArgoCD + cert-manager | [docs/phases/01-argocd-certs.md](docs/phases/01-argocd-certs.md) | 15–20 min |
+| 1 — TLS Certificate Automation | [docs/phases/01-tls-cert-automation.md](docs/phases/01-tls-cert-automation.md) | 15–20 min |
 | 2 — GPU Nodes + NFD + NVIDIA | [docs/phases/02-gpu-nodes.md](docs/phases/02-gpu-nodes.md) | 20–40 min |
 | 3 — Operators + RHOAI | [docs/phases/03-operators-rhoai.md](docs/phases/03-operators-rhoai.md) | 20–30 min |
 | 4 — Monitoring | [docs/phases/04-monitoring.md](docs/phases/04-monitoring.md) | 10 min |

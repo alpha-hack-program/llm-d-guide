@@ -1,6 +1,6 @@
-# Phase 1 — ArgoCD + cert-manager + Let's Encrypt
+# Phase 1 — TLS Certificate Automation
 
-> Part of the [llm-d-demo Co-pilot Runbook](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
 **Goal:** Install the GitOps operator and automate TLS certificate lifecycle.
@@ -18,7 +18,7 @@ Do NOT pass `--set cloud=aws` (or `cloud=none`) without an explicit answer from 
 
 ### Step 1 — ArgoCD (Red Hat OpenShift GitOps) *(optional)*
 
-Not required if applying manifests directly with `helm template | oc apply`.
+> **Ask the user before skipping:** "Do you want to install ArgoCD (OpenShift GitOps), or will you apply manifests directly with `helm template | oc apply`?" Do NOT skip without confirmation.
 
 ```bash
 helm template openshift-gitops ./gitops/operators/openshift-gitops | oc apply -f -

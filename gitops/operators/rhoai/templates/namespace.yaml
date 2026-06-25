@@ -6,3 +6,10 @@ metadata:
     openshift.io/display-name: {{ .Values.namespace.displayName | quote }}
   labels:
     openshift.io/cluster-monitoring: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: redhat-ods-applications
+  labels:
+    openshift.io/cluster-monitoring: "true"

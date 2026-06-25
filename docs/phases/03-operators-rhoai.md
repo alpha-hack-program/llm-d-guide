@@ -1,6 +1,6 @@
 # Phase 3 — Core Operators + RHOAI
 
-> Part of the [llm-d-demo Co-pilot Runbook](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
 **Goal:** Install Connectivity Link, LeaderWorkerSet, and RHOAI, then configure the DataScienceCluster.
@@ -14,15 +14,15 @@
 **Install order (sequence matters):**
 
 ```
-connectivity-link  →  leader-worker-set  →  RHOAI operator (OLM subscription)
-       ↓
-  (wait for CRDs)
-       ↓
-  RHOAI instance (DSCInitialization + DataScienceCluster)
-       ↓
-  (wait for controller pods)
-       ↓
-  monitoring stack (Tempo, OTel, Grafana)
+connectivity-link operator  →  Kuadrant CR (Ready=True)  →  leader-worker-set  →  RHOAI operator (OLM subscription)
+                                       ↓
+                                 (wait for CRDs)
+                                       ↓
+                                 RHOAI instance (DSCInitialization + DataScienceCluster)
+                                       ↓
+                                 (wait for controller pods)
+                                       ↓
+                                 monitoring stack (Tempo, OTel, Grafana)
 ```
 
 ### Step 1 — Connectivity Link (RHCL operator — Authorino + Limitador + Kuadrant CRDs)
@@ -43,14 +43,15 @@ Create the Kuadrant CR — instantiates the Authorino and Limitador operands:
 ```bash
 helm template gitops/instance/maas/connectivity-link \
   --name-template maas-connectivity-link | oc apply -f -
+oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
 
-# Confirm the CR was created — Ready: False at this point is EXPECTED and not an error.
-# Kuadrant requires a GatewayClass (controllerName: openshift.io/gateway-controller/v1)
-# to reconcile Ready. That GatewayClass is created in Phase 5. Do not wait for Ready here.
-oc get kuadrant kuadrant -n kuadrant-system
+# If it stays Not Ready with "istio/envoy gateway not installed",
+# the operator just needs a restart to detect the built-in Gateway API controller:
+#   oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
+#   oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
 ```
 
-> **`Ready: False` with "istio / envoy gateway not installed" is expected at this stage.** The GatewayClass Kuadrant needs is created by the llm-d gateway chart in Phase 5. Kuadrant will automatically reconcile to `Ready: True` once that GatewayClass exists. Do NOT restart the operator pod or search the marketplace — proceed to Phase 4.
+> **`Ready: False` with "istio / envoy gateway not installed"** — the built-in Gateway API controller is sufficient; no Service Mesh or separate gateway operator is needed. The Kuadrant operator sometimes misses it on first start. Restart the operator pod (see commented command above) and it will detect the controller on the next reconciliation. Do NOT search the marketplace or install any gateway operator — just restart the pod.
 
 ### Step 2 — Leader Worker Set
 
@@ -270,7 +271,7 @@ oc label namespace <project-name> modelmesh-enabled=false opendatahub.io/dashboa
 - **Connectivity Link install location:** The RHCL operator subscription is in `openshift-operators` (all-namespaces mode), NOT in `kuadrant-system`. The `kuadrant-system` namespace is created by the `Kuadrant` CR (`gitops/instance/maas/connectivity-link`) — it does not exist before that CR is applied.
 - Apply connectivity-link first — Authorino must be running before RHOAI configures authentication.
 - After the RHCL operator is ready, create the Kuadrant CR: `helm template gitops/instance/maas/connectivity-link --name-template maas-connectivity-link | oc apply -f -`. Without this CR, Authorino and Limitador pods are not deployed and MaaS auth/rate-limiting is silently unenforced.
-- **Kuadrant CR `Ready: False` — "istio / envoy gateway not installed" — this is expected in Phase 3.** The Kuadrant operator requires a `GatewayClass` with `controllerName: openshift.io/gateway-controller/v1` to reconcile Ready. This GatewayClass is created by the llm-d gateway chart (`gitops/instance/llm-d/gateway`) in Phase 5 Step 1. Once that chart is applied, **the Kuadrant operator pod must be restarted** to detect the new GatewayClass — it does not watch passively. Phase 5 includes this restart. `oc get gatewayclass` returning empty in Phase 3 is **correct** (no GatewayClass exists yet). Do NOT search the marketplace or install any gateway operator — proceed to Phase 4 and the restart happens in Phase 5.
+- **Kuadrant CR `Ready: False` — "istio / envoy gateway not installed"** — the built-in Gateway API controller is sufficient. The Kuadrant operator sometimes fails to detect it on first start. Fix: restart the operator pod (`oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator`) and wait for `Ready: True`. Do NOT search the marketplace or install any gateway operator.
 - **`modelsAsService` must be `false` during Phase 3.** The `maas-api` pod requires both the MaaS gateway AND the `maas-db-config` database secret to exist before it can start. Enabling it before Phase 6 Step 4 (after gateway and database are ready) leaves the DataScienceCluster `Not Ready (modelsasservice)` with no maas-api pod. The default in `values.yaml` is already `false`; do not override it to `true` here. Enable it in Phase 6 Step 4 by re-applying the chart.
 - `helm template rhoai | oc apply` may fail if CRDs aren't established yet. The wait commands above prevent this, but re-run them if you hit `resource mapping not found`.
 - `helm template rhoai | oc apply` may also fail on `OdhDashboardConfig` on the first pass — the CRD is registered only after the Dashboard component initialises. Wait for `oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io` and re-run.

@@ -1,4 +1,4 @@
-# AGENTS.md — llm-d-demo Co-pilot Runbook
+# AGENTS.md — llm-d-guide Co-pilot Runbook]
 
 This file gives assistants (Claude Code, OpenCode, Cursor, and compatible tools) persistent
 context for installing **Red Hat OpenShift AI 3.4** (self-managed) with **llm-d** on
@@ -10,6 +10,10 @@ before asking for help.
 Each phase has a **full guide** in [`docs/phases/`](docs/phases/) — the assistant should load the
 relevant file when you say which phase you are on. Reference material (validation commands, MaaS
 troubleshooting) is in [`docs/reference/`](docs/reference/).
+
+**Assistant behavior:**
+- **Explain before executing.** Before each major step (operator installs, chart applies, config changes), briefly explain what it does and why. Wait for the user to confirm before running it.
+- **Never skip optional steps without asking.** If a step is marked optional, ask the user whether to include or skip it.
 
 ---
 
@@ -53,7 +57,7 @@ troubleshooting) is in [`docs/reference/`](docs/reference/).
 | Phase | Name | Guide | Approx. time | Human gate |
 |---|---|---|---|---|
 | 0 | Cluster validation | [docs/phases/00-validation.md](docs/phases/00-validation.md) | 5 min | Confirm env vars + StorageClass |
-| 1 | ArgoCD + cert-manager + Let's Encrypt | [docs/phases/01-argocd-certs.md](docs/phases/01-argocd-certs.md) | 15–20 min | Verify certs `READY=True` |
+| 1 | TLS Certificate Automation | [docs/phases/01-tls-cert-automation.md](docs/phases/01-tls-cert-automation.md) | 15–20 min | Verify certs `READY=True` |
 | 2 | GPU nodes + NFD + NVIDIA GPU Operator | [docs/phases/02-gpu-nodes.md](docs/phases/02-gpu-nodes.md) | 20–40 min | Confirm GPU nodes are schedulable |
 | 3 | Core operators + RHOAI | [docs/phases/03-operators-rhoai.md](docs/phases/03-operators-rhoai.md) | 20–30 min | Approve InstallPlans; CSVs `Succeeded` |
 | 4 | Monitoring stack | [docs/phases/04-monitoring.md](docs/phases/04-monitoring.md) | 10 min | Optional sign-off |
@@ -69,13 +73,13 @@ Confirm the cluster is ready: OCP 4.21+, cluster admin access, default StorageCl
 **Critical:** Derive auto-derived variables from the cluster (see table above). Ask the user only for the user-provided variables — at minimum `CLOUD` and `AWS_INSTANCE_TYPE` for an AWS install.
 **Full guide:** [docs/phases/00-validation.md](docs/phases/00-validation.md)
 
-### Phase 1 — ArgoCD + cert-manager + Let's Encrypt
-Install GitOps operator and automate TLS certificate lifecycle.
+### Phase 1 — TLS Certificate Automation
+Install cert-manager operator and automate TLS certificate lifecycle.
 **Critical:**
 - Ask the user `cloud=aws` or `cloud=none` before applying. First `helm template | oc apply` will fail on the `CertManager` CR — wait for CSV `Succeeded`, then re-run.
 - For `cloud=aws`: run `./scripts/validate-cluster-domain.sh` (mandatory) and **stop to confirm the extracted domain with the user** before applying the cert-manager-route53 chart — a wrong domain causes silent Let's Encrypt failures.
 - The human gate requires all certificates to show `READY=True` in the verify command output — `Issuing` means the cert is not done yet; wait until `Ready`.
-**Full guide:** [docs/phases/01-argocd-certs.md](docs/phases/01-argocd-certs.md)
+**Full guide:** [docs/phases/01-tls-cert-automation.md](docs/phases/01-tls-cert-automation.md)
 
 ### Phase 2 — GPU Nodes + NFD + NVIDIA GPU Operator
 Add GPU worker nodes and install hardware detection and driver stack.
@@ -85,16 +89,24 @@ Add GPU worker nodes and install hardware detection and driver stack.
 ### Phase 3 — Core Operators + RHOAI
 Install Connectivity Link, LeaderWorkerSet, and RHOAI, then configure the DataScienceCluster.
 **Critical:** Do NOT install Kueue unless explicitly required. `modelsAsService` must be `false` during this phase. Apply connectivity-link first — Authorino must be running before RHOAI.
-**Kuadrant `Ready: False` is expected at end of Phase 3** — the GatewayClass Kuadrant needs is created in Phase 5. Do not search the marketplace. Proceed to Phase 4; Phase 5 creates the GatewayClass and restarts the Kuadrant operator pod to force reconciliation.
+**Kuadrant `Ready: False` after creating the CR** — the operator sometimes fails to detect the built-in Gateway API controller on first start. Restart the operator pod (`oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator`) and wait for `Ready: True` before proceeding. Do not search the marketplace or install any gateway operator.
 **Full guide:** [docs/phases/03-operators-rhoai.md](docs/phases/03-operators-rhoai.md)
 
 ### Phase 4 — Monitoring Stack
 Install COO for llm-d metrics dashboards. Enable User Workload Monitoring.
+**Critical:**
+- After installing COO, create **two UIPlugin CRs** (`Dashboards` and `Monitoring` with `perses.enabled: true`) — without these the Perses tab does not appear in the console.
+- PersesDashboard CRs must be in the `openshift-cluster-observability-operator` namespace with label `app.kubernetes.io/part-of: monitoring` — the Monitoring UIPlugin only discovers dashboards matching these criteria.
+- Use `vllm.extraArgs` in per-model values files, **not** `env` with `VLLM_ADDITIONAL_ARGS` — the chart auto-generates that env var from `vllm.extraArgs`; setting both causes a duplicate-env rejection.
 **Full guide:** [docs/phases/04-monitoring.md](docs/phases/04-monitoring.md)
 
 ### Phase 5 — llm-d Quick Start
 Deploy the gateway, a namespace, and an LLMInferenceService, then test the endpoint.
-**Critical:** Set `maas.enabled: false` when deploying in Phase 5. Verify intelligent routing and monitoring integration after deployment.
+**Critical:**
+- Set `maas.enabled: false` when deploying in Phase 5.
+- Use `vllm.extraArgs` (not `env` with `VLLM_ADDITIONAL_ARGS`) in per-model values — the chart auto-generates that env var and duplicates cause admission errors.
+- The default hardware profile is `gpu-profile` (auto-selected when `gpuCount > 0`). Set it explicitly in the per-model values file for clarity.
+- Verify intelligent routing and monitoring integration after deployment.
 **Full guide:** [docs/phases/05-llmd-quickstart.md](docs/phases/05-llmd-quickstart.md)
 
 ### Phase 6 — MaaS

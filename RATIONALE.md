@@ -62,7 +62,7 @@ conflicting operators (ODH, Service Mesh 2.x) are pre-installed.
 
 ---
 
-## Phase 1 — ArgoCD + cert-manager + Let's Encrypt
+## Phase 1 — TLS Certificate Automation
 
 ### ArgoCD (Red Hat OpenShift GitOps)
 

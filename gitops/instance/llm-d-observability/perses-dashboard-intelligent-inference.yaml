@@ -2,10 +2,10 @@ apiVersion: perses.dev/v1alpha2
 kind: PersesDashboard
 metadata:
   name: llm-d-intelligent-inference
-  namespace: redhat-ods-monitoring
+  namespace: openshift-cluster-observability-operator
   labels:
     app: llm-d
-    app.kubernetes.io/part-of: dashboard
+    app.kubernetes.io/part-of: monitoring
     app.opendatahub.io/dashboard: "true"
 spec:
   config:
@@ -82,9 +82,9 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: |
-                    sum(rate(kserve_vllm:prefix_cache_hits_total{namespace="maas-demo"}[5m]))
+                    sum(rate(kserve_vllm:prefix_cache_hits_total{namespace=~".+"}[5m]))
                     /
-                    sum(rate(kserve_vllm:prefix_cache_queries_total{namespace="maas-demo"}[5m]))
+                    sum(rate(kserve_vllm:prefix_cache_queries_total{namespace=~".+"}[5m]))
                     * 100
                   seriesNameFormat: "Cache Hit Rate %"
 
@@ -107,7 +107,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: |
-                    sum(rate(kserve_vllm:prompt_tokens_cached_total{namespace="maas-demo"}[5m])) * 60
+                    sum(rate(kserve_vllm:prompt_tokens_cached_total{namespace=~".+"}[5m])) * 60
                   seriesNameFormat: "Tokens/min saved"
 
       ttftP95:
@@ -130,7 +130,7 @@ spec:
                 spec:
                   query: |
                     histogram_quantile(0.95, sum by (le, model_name) (
-                      rate(kserve_vllm:time_to_first_token_seconds_bucket{namespace="maas-demo"}[5m])
+                      rate(kserve_vllm:time_to_first_token_seconds_bucket{namespace=~".+"}[5m])
                     ))
                   seriesNameFormat: "{{model_name}} P95"
 
@@ -154,7 +154,7 @@ spec:
                 spec:
                   query: |
                     histogram_quantile(0.99, sum by (le, model_name) (
-                      rate(kserve_vllm:time_to_first_token_seconds_bucket{namespace="maas-demo"}[5m])
+                      rate(kserve_vllm:time_to_first_token_seconds_bucket{namespace=~".+"}[5m])
                     ))
                   seriesNameFormat: "{{model_name}} P99"
 
@@ -177,7 +177,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: |
-                    kserve_vllm:kv_cache_usage_perc{namespace="maas-demo"}
+                    kserve_vllm:kv_cache_usage_perc{namespace=~".+"}
                   seriesNameFormat: "{{model_name}}"
 
       queueDepth:
@@ -199,7 +199,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: |
-                    kserve_vllm:num_requests_waiting{namespace="maas-demo"}
+                    kserve_vllm:num_requests_waiting{namespace=~".+"}
                   seriesNameFormat: "Waiting - {{model_name}}"
           - kind: TimeSeriesQuery
             spec:
@@ -207,7 +207,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: |
-                    kserve_vllm:num_requests_running{namespace="maas-demo"}
+                    kserve_vllm:num_requests_running{namespace=~".+"}
                   seriesNameFormat: "Running - {{model_name}}"
 
       requestRate:
@@ -229,7 +229,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: |
-                    sum(rate(kserve_vllm:request_success_total{namespace="maas-demo"}[5m]))
+                    sum(rate(kserve_vllm:request_success_total{namespace=~".+"}[5m]))
                   seriesNameFormat: "Success"
           - kind: TimeSeriesQuery
             spec:
@@ -237,5 +237,5 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   query: |
-                    sum(rate(kserve_vllm:request_failure_total{namespace="maas-demo"}[5m]))
+                    sum(rate(kserve_vllm:request_failure_total{namespace=~".+"}[5m]))
                   seriesNameFormat: "Failure"

@@ -1,6 +1,6 @@
 # Validation Commands
 
-> Part of the [llm-d-demo Co-pilot Runbook](../../AGENTS.md). Use these commands anytime to check
+> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). Use these commands anytime to check
 > cluster health.
 
 ## Core infrastructure

@@ -4,6 +4,8 @@ metadata:
   annotations:
     openshift.io/display-name: Red Hat build of OpenTelemetry Operator
   name: openshift-opentelemetry-operator
+  labels:
+    openshift.io/cluster-monitoring: "true"
 ---
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup

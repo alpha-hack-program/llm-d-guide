@@ -1,6 +1,6 @@
 # Phase 6 — MaaS
 
-> Part of the [llm-d-demo Co-pilot Runbook](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 > See also: [MaaS Troubleshooting](../reference/maas-troubleshooting.md) |
 > [ExternalModel Guide](../reference/external-models.md)
@@ -34,12 +34,12 @@ CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spe
 helm template gitops/instance/maas/gateway --name-template maas-gateway \
   --set clusterDomain="${CLUSTER_DOMAIN}" \
   --set useOpenShiftRoute=true \
-  --set tls.secretName=router-certs-default \
+  --set tls.secretName=ingress-certs \
   --set "gateway.modelNamespaces={llm-d-demo}" | oc apply -f -
 oc get gateway maas-default-gateway -n openshift-ingress
 ```
 
-> **Use `router-certs-default`, not `ingress-certs`:** The gateway chart annotates the Gateway Service with `service.beta.openshift.io/serving-cert-secret-name=<tls.secretName>`, which causes the service-ca-operator to create (or overwrite) that secret with a certificate valid only for the internal Service DNS name. If you pass `tls.secretName=ingress-certs`, the service-ca-operator silently replaces it with an internal-only cert. The Envoy pod then presents it to all clients — including the Gen AI Studio backend, which connects to `https://maas.<cluster-domain>/maas-api/...` and receives a certificate that does not cover the public hostname (`x509: certificate is valid for ...openshift-ingress.svc, not maas.<cluster-domain>`). `router-certs-default` already exists in `openshift-ingress` and contains the wildcard cert `*.apps.<cluster-domain>` signed by the OCP ingress operator CA — a CA that is already present in every RHOAI component's trust bundle.
+> **TLS secret — human gate:** The default `ingress-certs` is the wildcard cert from Phase 1 (cert-manager / Let's Encrypt). For non-cloud or bare-metal installs where this secret does not exist, **stop and ask the user** which TLS secret to use (e.g. `router-certs-default` or a custom cert).
 
 ### Step 2 — MaaS Database
 
@@ -164,7 +164,7 @@ oc get maasmodelref -n <model-namespace>
 
 # Create MaaSSubscription (token rate limits per model, per group)
 cat <<'EOF' | oc apply -f -
-apiVersion: models.opendatahub.io/v1alpha1
+apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSSubscription
 metadata:
   name: default-subscription
@@ -184,7 +184,7 @@ EOF
 
 # Create MaaSAuthPolicy (grants groups access to models)
 cat <<'EOF' | oc apply -f -
-apiVersion: models.opendatahub.io/v1alpha1
+apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSAuthPolicy
 metadata:
   name: default-auth-policy
@@ -200,7 +200,7 @@ EOF
 ```
 
 **Critical schema notes:**
-- `MaaSSubscription` and `MaaSAuthPolicy` use `apiVersion: models.opendatahub.io/v1alpha1`; `Tenant` and `ExternalModel` use `maas.opendatahub.io/v1alpha1`
+- `MaaSSubscription`, `MaaSAuthPolicy`, `Tenant`, `ExternalModel`, and `MaaSModelRef` all use `apiVersion: maas.opendatahub.io/v1alpha1`
 - `owner.groups` is a **list of objects** with `kind: Group` + `name`, NOT a list of strings
 - `tokenRateLimits` is **required on each modelRef**, with `window` and `limit` fields
 - `window` units: `s`, `m`, `h` only — `d` is not supported, use `24h`
