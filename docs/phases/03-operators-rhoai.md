@@ -14,15 +14,19 @@
 **Install order (sequence matters):**
 
 ```
-connectivity-link operator  →  Kuadrant CR (Ready=True)  →  leader-worker-set  →  RHOAI operator (OLM subscription)
+connectivity-link operator  →  Kuadrant CR (Ready=True, observability enabled)  →  leader-worker-set
+                                       ↓
+                                 (wait for CRDs)
+                                       ↓
+                       monitoring operators (Tempo, OpenTelemetry) — BEFORE RHOAI
+                                       ↓
+                                 RHOAI operator (OLM subscription)
                                        ↓
                                  (wait for CRDs)
                                        ↓
                                  RHOAI instance (DSCInitialization + DataScienceCluster)
                                        ↓
                                  (wait for controller pods)
-                                       ↓
-                                 monitoring stack (Tempo, OTel, Grafana)
 ```
 
 ### Step 1 — Connectivity Link (RHCL operator — Authorino + Limitador + Kuadrant CRDs)
@@ -45,6 +49,10 @@ helm template gitops/instance/maas/connectivity-link \
   --name-template maas-connectivity-link | oc apply -f -
 oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
 
+# Verify observability is enabled (required for monitoring stack in Phase 4)
+oc get kuadrant kuadrant -n kuadrant-system -o jsonpath='{.spec.observability.enable}'
+# Expected: true
+
 # If it stays Not Ready with "istio/envoy gateway not installed",
 # the operator just needs a restart to detect the built-in Gateway API controller:
 #   oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
@@ -65,7 +73,24 @@ oc wait --for=condition=Established crd/leaderworkersets.leaderworkerset.x-k8s.i
 oc get csv -n openshift-lws-operator -w | grep -E "leader-worker-set"
 ```
 
-### Step 3 — Red Hat OpenShift AI Operator
+### Step 3 — Monitoring Operators (BEFORE RHOAI)
+
+**Important:** Tempo and OpenTelemetry operators must be installed BEFORE RHOAI. The RHOAI DataScienceInitialization (DSCi) requires these operators to be present when it initializes the monitoring stack. Installing them after RHOAI causes the monitoring reconciliation to fail.
+
+```bash
+# a) Tempo Operator (distributed tracing)
+oc apply -k gitops/operators/tempo-operator
+oc get csv -n openshift-opentelemetry-operator -w | grep -E "tempo"
+
+# b) OpenTelemetry Operator
+oc apply -k gitops/operators/opentelemetry-operator
+oc get csv -n openshift-opentelemetry-operator -w | grep -E "opentelemetry"
+oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
+```
+
+Wait for both CSVs to reach `Succeeded` before proceeding to RHOAI installation.
+
+### Step 4 — Red Hat OpenShift AI Operator
 
 **Human gate — RHOAI channel:** Before installing, ask the user which OLM profile to use:
 - `stable` — GA release on `stable-3.x` (default)
@@ -88,7 +113,7 @@ helm template rhoai-operator ./gitops/operators/rhoai \
 oc get csv -n redhat-ods-operator -w | grep -E "rhods"
 ```
 
-### Step 4 — Configure OpenShift AI (DSCInitialization + DataScienceCluster)
+### Step 5 — Configure OpenShift AI (DSCInitialization + DataScienceCluster)
 
 ```bash
 oc wait --for=condition=Established crd/dashboards.components.platform.opendatahub.io --timeout=600s
@@ -105,25 +130,6 @@ oc wait --for=condition=ready pod -l control-plane=odh-model-controller \
   -n redhat-ods-applications --timeout=300s
 oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager \
   -n redhat-ods-applications --timeout=300s
-```
-
-### Step 5 — Monitoring stack
-
-```bash
-# a) Tempo Operator (distributed tracing)
-oc apply -k gitops/operators/tempo-operator
-oc get csv -n openshift-operators -w | grep -E "tempo"
-
-# b) OpenTelemetry Operator
-oc apply -k gitops/operators/opentelemetry-operator
-oc get csv -n openshift-operators -w | grep -E "opentelemetry"
-oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
-
-# c) Grafana Operator (optional — for custom dashboards)
-oc apply -k gitops/operators/grafana-operator
-oc get csv -n grafana-operator -w | grep -E "grafana"
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator \
-  -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
 ```
 
 **Human gate:** All CSVs must show `Succeeded`. Run `./scripts/check-operators.sh` to verify.
@@ -259,6 +265,22 @@ while the dashboard is reloading its config, you can create namespaces directly 
 # kueue.openshift.io/managed=true after setting disableKueue: true and restarting
 oc new-project <project-name>
 oc label namespace <project-name> modelmesh-enabled=false opendatahub.io/dashboard=true
+```
+
+---
+
+## Optional — Grafana Operator
+
+> Skip this section unless you need custom Grafana dashboards. The COO (Cluster Observability Operator) in Phase 4 provides Perses dashboards in the OpenShift console, which is sufficient for most use cases.
+
+**Install Grafana Operator:**
+
+```bash
+# OPTIONAL — only for custom Grafana dashboards
+oc apply -k gitops/operators/grafana-operator
+oc get csv -n grafana-operator -w | grep -E "grafana"
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator \
+  -l operators.coreos.com/grafana-operator.grafana-operator= --timeout=300s
 ```
 
 ---

@@ -88,8 +88,13 @@ Add GPU worker nodes and install hardware detection and driver stack.
 **Full guide:** [docs/phases/02-gpu-nodes.md](docs/phases/02-gpu-nodes.md)
 
 ### Phase 3 — Core Operators + RHOAI
-Install Connectivity Link, LeaderWorkerSet, and RHOAI, then configure the DataScienceCluster.
-**Critical:** Do NOT install Kueue unless explicitly required. `modelsAsService` must be `false` during this phase. Apply connectivity-link first — Authorino must be running before RHOAI.
+Install Connectivity Link, LeaderWorkerSet, **monitoring operators (Tempo, OpenTelemetry)**, and RHOAI, then configure the DataScienceCluster.
+**Critical:** 
+- **Operator install order matters:** Connectivity Link → LeaderWorkerSet → **Tempo + OpenTelemetry (BEFORE RHOAI)** → RHOAI Operator → RHOAI Instance. The monitoring operators must be installed BEFORE RHOAI because the DSCInitialization requires them for monitoring stack initialization.
+- Enable Kuadrant observability (`spec.observability.enable: true`) when creating the Kuadrant CR — required for the monitoring stack in Phase 4.
+- Do NOT install Kueue unless explicitly required. 
+- `modelsAsService` must be `false` during this phase. 
+- Apply connectivity-link first — Authorino must be running before RHOAI.
 **Kuadrant `Ready: False` after creating the CR** — the operator sometimes fails to detect the built-in Gateway API controller on first start. Restart the operator pod (`oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator`) and wait for `Ready: True` before proceeding. Do not search the marketplace or install any gateway operator.
 **Full guide:** [docs/phases/03-operators-rhoai.md](docs/phases/03-operators-rhoai.md)
 

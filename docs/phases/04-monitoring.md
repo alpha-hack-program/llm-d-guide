@@ -27,8 +27,19 @@ oc get pods -n openshift-user-workload-monitoring -w
 
 ### Step 2 — Install Cluster Observability Operator
 
+**Important:** The operator is pinned to version 1.4.0 for compatibility with RHOAI 3.4.1. COO 1.5.0 introduces CLI flags that the perses image shipped with RHOAI 3.4.1 does not support, causing the `data-science-perses` pod to crash-loop and breaking the RHOAI dashboard monitoring drawer.
+
 ```bash
 oc apply -k gitops/operators/cluster-observability-operator
+
+# Verify COO 1.4.0 is installed
+oc get csv -n openshift-cluster-observability-operator | grep cluster-observability
+# Expected: cluster-observability-operator.v1.4.0   Succeeded
+
+# If you see a pending install plan, approve it:
+# oc get installplan -n openshift-cluster-observability-operator
+# oc patch installplan <install-plan-name> -n openshift-cluster-observability-operator \
+#   --type=merge -p '{"spec":{"approved":true}}'
 ```
 
 ### Step 3 — Enable Perses dashboards in the OpenShift console
@@ -81,5 +92,18 @@ oc apply -f gitops/instance/llm-d-observability/perses-dashboard-intelligent-inf
 
 For complete setup and troubleshooting:  
 [gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md](../../gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md)
+
+### Step 5 — Verify RHOAI dashboard monitoring drawer
+
+The RHOAI dashboard has an integrated monitoring view gated by the `observabilityDashboard` flag. This flag is automatically set to `true` by the RHOAI instance Helm template applied in Phase 3 Step 5. Verify it's enabled:
+
+```bash
+# Verify observabilityDashboard is enabled (set by RHOAI instance template in Phase 3)
+oc get odhdashboardconfig odh-dashboard-config -n redhat-ods-applications \
+  -o jsonpath='{.spec.dashboardConfig.observabilityDashboard}'
+# Expected: true
+```
+
+This surfaces a monitoring drawer inside the RHOAI dashboard (distinct from the OCP console's Observe → Dashboards view configured in Steps 3–4). The drawer becomes functional after the full monitoring stack (Tempo, OpenTelemetry, COO) is deployed.
 
 **End of Phase 4:** Stop here and report monitoring stack status to the user. Verify COO CSV is Succeeded. Wait for confirmation before proceeding to [Phase 5](05-llmd-quickstart.md).
