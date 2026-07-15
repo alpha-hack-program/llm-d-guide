@@ -1,0 +1,35 @@
+══════════════════════════════════════════════════════════════
+  Phase 5 — llm-d Quick Start
+══════════════════════════════════════════════════════════════
+
+Goal:     Deploy the gateway, a namespace, and an LLMInferenceService,
+          then test the inference endpoint.
+Time:     ~15-20 min
+
+Pre-flight:
+  - GPU nodes must show nvidia.com/gpu capacity
+  - LLMInferenceService + LeaderWorkerSet CRDs available
+  - Controller pods running
+  - ./scripts/check-operators.sh passes
+  - User Workload Monitoring enabled
+
+Steps:
+  1. Configure Gateway (LoadBalancer or OpenShift Route)
+     → Kuadrant becomes Ready after GatewayClass is created
+  2. Create namespace (PROJECT=llm-d-demo)
+  3. Ask user: which model? (OCI or HuggingFace)
+     → Deploy LLMInferenceService
+     ⚠ Set maas.enabled=false
+     ⚠ Use vllm.extraArgs, NOT env VLLM_ADDITIONAL_ARGS
+  4. Verify deployment (pods Running, service Ready)
+  5. Test endpoint (curl completions + chat)
+  6. Deploy monitoring (ServiceMonitors, Perses dashboard)
+  7. Verify intelligent routing (./scripts/verify-intelligent-router.sh)
+
+Human gate:
+  - Chat completion returns coherent response
+  - Intelligent routing verified (EPP + prefix cache)
+  - Monitoring metrics flowing
+
+Guide: docs/phases/05-llmd-quickstart.md
+══════════════════════════════════════════════════════════════

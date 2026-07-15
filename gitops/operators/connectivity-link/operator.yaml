@@ -1,3 +1,5 @@
+# Pin to RHCL 1.3.4 for compatibility with RHOAI 3.4.1
+# James Harmison's maas-from-scratch also pins to 1.3.4.
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
@@ -5,7 +7,8 @@ metadata:
   namespace: openshift-operators
 spec:
   channel: stable
-  installPlanApproval: Automatic
+  installPlanApproval: Manual  # Manual approval required to prevent auto-upgrade
   name: rhcl-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
+  startingCSV: rhcl-operator.v1.3.4  # Pinned as of RHOAI 3.4.1

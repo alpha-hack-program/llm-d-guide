@@ -141,14 +141,14 @@ Check: `oc get route -n openshift-ingress -l app.opendatahub.io/modelsasservice=
 
 ## MaaS dashboard flags
 
-All four `OdhDashboardConfig` flags must be `true`:
+All four MaaS-related `OdhDashboardConfig` flags must be `true`:
 
 ```bash
 oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge \
   -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"modelAsService":true,"maasAuthPolicies":true,"vLLMDeploymentOnMaaS":true}}}'
 ```
 
-The inference chart sets these automatically when `modelsAsService=true` in the RHOAI values.
+The inference chart sets these automatically when `modelsAsService=true` in the RHOAI values. The `observabilityDashboard` flag (for the monitoring drawer) is separate and configured in Phase 4.
 
 ## MaaSAuthPolicy subjects must match MaaSSubscription owner groups
 

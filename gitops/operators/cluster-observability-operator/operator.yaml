@@ -14,6 +14,11 @@ metadata:
   namespace: openshift-cluster-observability-operator
 spec: {}
 ---
+# Pin to COO 1.4.0 for compatibility with RHOAI 3.4.1
+# COO 1.5.0 introduces --web.tls-min-version flag that the perses image
+# shipped with RHOAI 3.4.1 does not support, causing data-science-perses
+# pod to crash-loop and breaking the RHOAI dashboard monitoring drawer.
+# James Harmison's maas-from-scratch also pins to 1.4.0 for this reason.
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
@@ -21,7 +26,8 @@ metadata:
   namespace: openshift-cluster-observability-operator
 spec:
   channel: stable
-  installPlanApproval: Automatic
+  installPlanApproval: Manual  # Manual approval required to prevent auto-upgrade to 1.5.0
   name: cluster-observability-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
+  startingCSV: cluster-observability-operator.v1.4.0  # Pinned as of RHOAI 3.4.1

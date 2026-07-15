@@ -5,34 +5,23 @@
 
 **Goal:** Install the GitOps operator and automate TLS certificate lifecycle.
 
-**Before starting Phase 1 — ask the user:**
-> "Is this cluster running on AWS, or on bare metal / a non-AWS cloud?
-> - **AWS** → cert-manager will use Route53 DNS-01 via CCO (`cloud=aws`).
-> - **Bare metal / non-AWS** → no CredentialsRequest is created (`cloud=none`).
+**Before starting Phase 1 — confirm two variables with the user:**
+
+> 1. **Cloud provider** (if not already confirmed in Phase 0):
+>    "Is this cluster running on AWS?" → `CLOUD=aws` or `CLOUD=none`.
 >
-> Which is it?"
+> 2. **TLS issuer:**
+>    "Do you want Let's Encrypt (requires Route53 access) or a local CA for TLS?"
+>    → `TLS_ISSUER=letsencrypt` or `TLS_ISSUER=local-ca`.
+>    A local CA works on any platform, including AWS — useful for labs, demos,
+>    or clusters without public DNS access.
 
 Do NOT pass `--set cloud=aws` (or `cloud=none`) without an explicit answer from the user.
+Let's Encrypt requires `CLOUD=aws`; if the user picks `letsencrypt` with `CLOUD=none`, stop and explain.
 
 ---
 
-### Step 1 — ArgoCD (Red Hat OpenShift GitOps) *(optional)*
-
-> **Ask the user before skipping:** "Do you want to install ArgoCD (OpenShift GitOps), or will you apply manifests directly with `helm template | oc apply`?" Do NOT skip without confirmation.
-
-```bash
-helm template openshift-gitops ./gitops/operators/openshift-gitops | oc apply -f -
-```
-
-Wait for the CSV to reach `Succeeded`:
-
-```bash
-oc get csv -n openshift-gitops-operator --watch
-```
-
----
-
-### Step 2 — cert-manager Operator
+### Step 1 — cert-manager Operator
 
 Set `CLOUD` to **aws** when running on AWS, or **none** for bare metal / non-AWS:
 
@@ -73,10 +62,10 @@ oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
 
 ---
 
-### Step 3 — Let's Encrypt Cluster Issuers and Certificates
+### Step 2 — Let's Encrypt Cluster Issuers and Certificates
 
-> **Note:** Only required if `CLOUD=aws`. For bare metal / non-AWS, skip to
-> [Step 3 — Alternative: Local CA](#step-3--alternative-local-ca-non-aws--bare-metal) below.
+> **Note:** Only required if `TLS_ISSUER=letsencrypt`. For local CA, skip to
+> [Step 2 — Alternative: Local CA](#step-2--alternative-local-ca) below.
 
 **MANDATORY: Run the domain validation script now (AWS only):**
 
@@ -161,11 +150,11 @@ helm template gitops/operators/cert-manager-route53 \
 
 ---
 
-### Step 3 — Alternative: Local CA (non-AWS / bare metal)
+### Step 2 — Alternative: Local CA
 
-> **Note:** Use this step instead of Step 3 (Let's Encrypt) when `CLOUD=none` — i.e., bare metal,
-> non-AWS clouds, or lab/demo environments without public DNS. This creates a local CA chain
-> using cert-manager: a self-signed root bootstraps a CA certificate, which then issues
+> **Note:** Use this step instead of Step 2 (Let's Encrypt) when `TLS_ISSUER=local-ca`. This works
+> on any platform — AWS, bare metal, non-AWS clouds, or lab/demo environments. It creates a local
+> CA chain using cert-manager: a self-signed root bootstraps a CA certificate, which then issues
 > properly signed certs for the cluster's API and ingress endpoints.
 
 **Wait for cert-manager pods to be ready:**

@@ -31,6 +31,11 @@ connectivity-link operator  →  Kuadrant CR (Ready=True, observability enabled)
 
 ### Step 1 — Connectivity Link (RHCL operator — Authorino + Limitador + Kuadrant CRDs)
 
+> **RHCL version pinning (RHOAI 3.4):** The RHCL operator subscription in
+> `gitops/operators/connectivity-link` pins to **v1.3.x**. RHCL v1.4.0 has a known Wasm shim bug
+> that breaks Authorino auth calls on MaaS gateways (HTTP 500 `AUTH_FAILURE`). **Do not upgrade
+> to v1.4.0.** This pin should be revisited once RHOAI 3.5 is GA.
+
 ```bash
 oc apply -k ./gitops/operators/connectivity-link
 # InstallPlan may require manual approval due to dependencies
@@ -47,19 +52,22 @@ Create the Kuadrant CR — instantiates the Authorino and Limitador operands:
 ```bash
 helm template gitops/instance/maas/connectivity-link \
   --name-template maas-connectivity-link | oc apply -f -
-oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
+
+# Verify Authorino and Limitador pods are running
+oc get pods -n kuadrant-system
+# Expected: authorino and limitador pods Running
 
 # Verify observability is enabled (required for monitoring stack in Phase 4)
 oc get kuadrant kuadrant -n kuadrant-system -o jsonpath='{.spec.observability.enable}'
 # Expected: true
-
-# If it stays Not Ready with "istio/envoy gateway not installed",
-# the operator just needs a restart to detect the built-in Gateway API controller:
-#   oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
-#   oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
 ```
 
-> **`Ready: False` with "istio / envoy gateway not installed"** — the built-in Gateway API controller is sufficient; no Service Mesh or separate gateway operator is needed. The Kuadrant operator sometimes misses it on first start. Restart the operator pod (see commented command above) and it will detect the controller on the next reconciliation. Do NOT search the marketplace or install any gateway operator — just restart the pod.
+> **`Ready: False` with "Gateway API provider (istio / envoy gateway) is not installed"** —
+> this is **expected at this point**. The Kuadrant operator requires a `GatewayClass` to report
+> `Ready: True`, but the GatewayClass is not created until Phase 5 (gateway deployment). As long
+> as Authorino and Limitador pods are running in `kuadrant-system`, the operator is functional.
+> Kuadrant will become `Ready` in Phase 5 after the GatewayClass is created and the operator pod
+> is restarted. Do NOT search the marketplace or install any gateway operator.
 
 ### Step 2 — Leader Worker Set
 

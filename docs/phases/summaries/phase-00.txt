@@ -1,0 +1,20 @@
+══════════════════════════════════════════════════════════════
+  Phase 0 — Cluster Validation
+══════════════════════════════════════════════════════════════
+
+Goal:     Confirm the cluster is ready before installing anything.
+Time:     ~5 min
+
+Steps:
+  1. Run ./scripts/preflight-validation.sh
+  2. Auto-derive: CLUSTER_DOMAIN, AWS_REGION, INFRA_ID, AMI_ID
+  3. Ask user: CLOUD (aws / none)
+  4. Ask user: TLS_ISSUER (letsencrypt / local-ca)
+  5. Ask user: AWS_INSTANCE_TYPE (if CLOUD=aws)
+
+Human gate:
+  - All preflight checks pass
+  - Environment variables confirmed
+
+Guide: docs/phases/00-validation.md
+══════════════════════════════════════════════════════════════

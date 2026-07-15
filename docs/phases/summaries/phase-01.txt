@@ -1,0 +1,24 @@
+══════════════════════════════════════════════════════════════
+  Phase 1 — TLS Certificate Automation
+══════════════════════════════════════════════════════════════
+
+Goal:     Install cert-manager and automate TLS certificate lifecycle.
+Time:     ~15-20 min
+Requires: CLOUD, TLS_ISSUER confirmed
+
+Steps:
+  1. Install cert-manager operator (retry loop for CRD race)
+  2. Wait for CSV Succeeded + 3 pods Ready
+  3a. [letsencrypt] Run ./scripts/validate-cluster-domain.sh
+      → STOP and confirm domain with user before proceeding
+      → Apply cert-manager-route53 chart
+  3b. [local-ca] Apply cert-manager-local-ca chart
+      → Inject CA into cluster trust bundle (mandatory)
+  4. Wait for certificates Ready=True
+
+Human gate:
+  - All certificates show READY=True
+  - Do NOT proceed with any cert showing False or Issuing
+
+Guide: docs/phases/01-tls-cert-automation.md
+══════════════════════════════════════════════════════════════

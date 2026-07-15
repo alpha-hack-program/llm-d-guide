@@ -7,6 +7,12 @@
 
 **Pre-flight checks the assistant must run before starting:**
 ```bash
+# GPU nodes must have nvidia.com/gpu capacity before deploying inference workloads.
+# (GPU provisioning started in Phase 2 — it runs in the background during Phases 3–4.)
+oc get nodes -o json | jq '.items[] | select(.status.capacity."nvidia.com/gpu") | {name: .metadata.name, gpu: .status.capacity."nvidia.com/gpu"}'
+# Expected: at least one node with "gpu": "1" (or more)
+# If no nodes show GPU capacity, wait — NVIDIA drivers may still be installing.
+
 # LLMInferenceService CRD available
 oc get crd llminferenceservices.serving.kserve.io
 
@@ -35,9 +41,12 @@ oc get pods -n openshift-user-workload-monitoring | grep prometheus-user-workloa
 
 ### Step 1 — Configure the Gateway
 
-**Ask the user:** LoadBalancer with pre-existing certificate, or OpenShift Route with self-signed?
+**Ask the user which gateway exposure method to use:**
 
-**Using a LoadBalancer with a pre-existing certificate:**
+**Option A — LoadBalancer with pre-existing certificate:**
+
+Creates a dedicated AWS LoadBalancer with a custom subdomain (`inference.apps.<domain>`).
+Requires Phase 1 Let's Encrypt certs.
 
 ```bash
 APP_NAME=gateway
@@ -55,7 +64,30 @@ helm template gitops/instance/llm-d/gateway \
   --include-crds | oc apply -f -
 ```
 
-**Using OpenShift router and generating a self-signed certificate:**
+**Option B — OpenShift Route with pre-existing certificate:**
+
+Uses the cluster's default router (no extra LoadBalancer). TLS passthrough to the gateway
+using the Phase 1 Let's Encrypt certs. Hostname: `openshift-ai-inference-openshift-ingress.apps.<domain>`.
+
+```bash
+APP_NAME=gateway
+GATEWAY_NAME=${GATEWAY_NAME:=openshift-ai-inference}
+CLUSTER_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+echo "CLUSTER_DOMAIN=${CLUSTER_DOMAIN}"
+
+helm template gitops/instance/llm-d/gateway \
+  --name-template ${APP_NAME} \
+  --set gatewayName="${GATEWAY_NAME}" \
+  --set clusterDomain="${CLUSTER_DOMAIN}" \
+  --set subdomain=inference \
+  --set useOpenShiftRoute=true \
+  --set tls.secretName=ingress-certs \
+  --include-crds | oc apply -f -
+```
+
+**Option C — OpenShift Route with self-signed certificate:**
+
+Uses the cluster's default router with a generated self-signed cert. No Phase 1 certs required.
 
 ```bash
 APP_NAME=gateway
@@ -73,8 +105,6 @@ helm template gitops/instance/llm-d/gateway \
   --set tls.generate=true --include-crds | oc apply -f -
 ```
 
-> **Gateway TLS:** if Let's Encrypt `ingress-certs` already exists in `openshift-ingress` (Phase 1 complete), use `--set tls.secretName=ingress-certs` — no need to generate a new cert.
-
 Verify the Gateway is ready and confirm Kuadrant has reconciled:
 
 ```bash
@@ -85,8 +115,9 @@ oc get gateway -n openshift-ingress
 # The Kuadrant operator must detect the new GatewayClass — it does NOT watch passively,
 # it requires a pod restart to pick it up. Wait 60s first; if still not Ready, restart:
 oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=60s || \
-  oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
-oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
+  (oc delete pod -n openshift-operators \
+    $(oc get pods -n openshift-operators -o name | grep kuadrant-operator-controller-manager) && \
+   oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m)
 # Expected: condition met
 # If it still does not reach Ready after the restart, check: oc get kuadrant -n kuadrant-system -o yaml
 ```

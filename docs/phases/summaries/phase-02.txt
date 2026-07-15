@@ -1,0 +1,23 @@
+══════════════════════════════════════════════════════════════
+  Phase 2 — GPU Nodes + NFD + NVIDIA GPU Operator
+══════════════════════════════════════════════════════════════
+
+Goal:     Add GPU worker nodes and install hardware detection/driver stack.
+Time:     ~20-40 min (GPU node provisioning dominates)
+Requires: AWS_INSTANCE_TYPE, AMI_ID, INFRA_ID, AWS_REGION
+
+Steps:
+  1. Ask user: How many AZs? (3 for prod, 1 for test)
+  2. Create GPU MachineSets (one per AZ)
+  3. Install NFD operator → wait CSV Succeeded
+  4. Install NVIDIA GPU operator → wait CSV Succeeded
+  5. Apply NFD instance CR → wait for labels
+  6. Apply NVIDIA ClusterPolicy CR → wait for ready
+
+Human gate:
+  - At least one GPU Machine is Provisioned
+  - Both operator CSVs Succeeded
+  - GPU capacity check deferred to Phase 5
+
+Guide: docs/phases/02-gpu-nodes.md
+══════════════════════════════════════════════════════════════

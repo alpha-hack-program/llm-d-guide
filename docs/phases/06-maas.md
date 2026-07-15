@@ -210,7 +210,7 @@ See README §9.2 Step 7 for multi-tier examples with different limits per group.
 
 ### Step 7 — Enable dashboard flags
 
-All four must be `true`:
+All four MaaS-related flags must be `true`:
 ```bash
 oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge \
   -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"modelAsService":true,"maasAuthPolicies":true,"vLLMDeploymentOnMaaS":true}}}'
@@ -247,7 +247,7 @@ curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
   > **Do NOT patch `maas-api-auth-policy` or `maas-auth-*` AuthPolicies** — they are managed by the maas-controller and any manual patches are overwritten on next reconciliation. The `kubernetesTokenReview.audiences` and TLS config in those policies are correct; only Kuadrant needs a restart to enforce them.
 - `POST /maas-api/v1/api-keys` returns `500` (exception, not auth failure): Authorino TLS not configured, or the `maas-default-gateway-authn-ssl` EnvoyFilter is missing. Remove and re-add the `authorino-tls-bootstrap` annotation on the gateway (Step 4 above).
 - **500 errors on API keys / authorization policies pages** — gateway OCP Route has wrong hostname. Check: `oc get route maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.host}'` must be `maas.<cluster-domain>`. If it shows `maas-default-gateway-openshift-ingress.<cluster-domain>`, re-apply the gateway chart (the chart had a bug where `useOpenShiftRoute=true` used the wrong hostname format). Symptom in `maas-ui` sidecar logs: `statusCode=503 ... invalid character '<'`.
-- Gen AI studio → API keys or Settings → Authorization policies tabs missing in the dashboard: check all four `OdhDashboardConfig` flags — `vLLMDeploymentOnMaaS` is the most commonly missing one.
+- Gen AI studio → API keys or Settings → Authorization policies tabs missing in the dashboard: check all MaaS `OdhDashboardConfig` flags (`genAiStudio`, `modelAsService`, `maasAuthPolicies`, `vLLMDeploymentOnMaaS`) — `vLLMDeploymentOnMaaS` is the most commonly missing one.
 - `LLMInferenceService` `HTTPRoutesReady: False` — `NotAllowedByListeners`: model namespace not in `gateway.modelNamespaces`. Re-apply the gateway chart with the correct namespace set.
 - `MaaSAuthPolicy` status loop in controller logs (`"failed to update MaaSAuthPolicy status"`) — harmless controller/CRD version mismatch. Auth and rate limiting work correctly despite this.
 - **EA2 → stable 3.4 migration only:** If `maas-controller` or `maas-api` Deployment shows an immutable selector error in the DSC, delete both Deployments and force a DSC reconcile — see `PATCH-MAAS.md §8`.

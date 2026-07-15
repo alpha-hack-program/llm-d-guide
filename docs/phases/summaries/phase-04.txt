@@ -1,0 +1,27 @@
+══════════════════════════════════════════════════════════════
+  Phase 4 — Monitoring Stack
+══════════════════════════════════════════════════════════════
+
+Goal:     Install COO, enable User Workload Monitoring, deploy
+          Perses dashboards for llm-d metrics.
+Time:     ~10 min
+
+Steps:
+  1. Enable User Workload Monitoring (cluster-monitoring-config)
+  2. Wait for prometheus-user-workload pods
+  3. Install Cluster Observability Operator (COO)
+  4. Create UIPlugin CRs:
+     - type: Dashboards
+     - type: Monitoring (with perses.enabled: true)
+     ⚠ Both UIPlugins required for Perses tab to appear
+  5. Deploy PersesDashboard CRs
+     → namespace: openshift-cluster-observability-operator
+     → label: app.kubernetes.io/part-of: monitoring
+
+Human gate:
+  - COO CSV Succeeded
+  - prometheus-user-workload pods Running
+  - Optional: verify Perses tab in console
+
+Guide: docs/phases/04-monitoring.md
+══════════════════════════════════════════════════════════════

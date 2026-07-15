@@ -1,0 +1,29 @@
+══════════════════════════════════════════════════════════════
+  Phase 3 — Core Operators + RHOAI
+══════════════════════════════════════════════════════════════
+
+Goal:     Install Connectivity Link, LeaderWorkerSet, monitoring
+          operators, and RHOAI. Configure DataScienceCluster.
+Time:     ~20-30 min
+
+Install order (sequence matters):
+  1. Connectivity Link → approve InstallPlan → wait CSVs
+     → Create Kuadrant CR (Authorino + Limitador)
+     ⚠ RHCL pinned to v1.3.x (v1.4.0 Wasm bug)
+     ⚠ Kuadrant Ready=False is EXPECTED (no GatewayClass yet)
+  2. LeaderWorkerSet → wait CRD
+  3. Tempo + OpenTelemetry → wait CSVs (BEFORE RHOAI)
+  4. RHOAI operator → ask user: stable or ea
+     → wait CSV Succeeded
+  5. RHOAI instance (DSCi + DSC) → two-pass apply
+     → wait LLMInferenceService CRD + controller pods
+
+DO NOT: install Kueue, set modelsAsService=true, install
+        Service Mesh 2.x or Serverless
+
+Human gate:
+  - ./scripts/check-operators.sh — all required Succeeded
+  - Controller pods running in redhat-ods-applications
+
+Guide: docs/phases/03-operators-rhoai.md
+══════════════════════════════════════════════════════════════

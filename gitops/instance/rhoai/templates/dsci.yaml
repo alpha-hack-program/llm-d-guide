@@ -9,5 +9,16 @@ spec:
   monitoring:
     managementState: Managed
     namespace: {{ .Values.dsci.monitoringNamespace | default "redhat-ods-monitoring" }}
+    alerting: {}
+    metrics:
+      replicas: {{ .Values.dsci.metricsReplicas | default 1 }}
+      storage:
+        retention: {{ .Values.dsci.metricsRetention | default "90d" }}
+        size: {{ .Values.dsci.metricsSize | default "5Gi" }}
+    traces:
+      sampleRatio: {{ .Values.dsci.tracesSampleRatio | default "0.1" | quote }}
+      storage:
+        backend: {{ .Values.dsci.tracesBackend | default "pv" }}
+        retention: {{ .Values.dsci.tracesRetention | default "2160h" }}
   serviceMesh:
     managementState: {{ .Values.dsci.serviceMeshState | default "Removed" }}

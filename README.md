@@ -25,6 +25,7 @@
 14. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
 15. [11. External Model MaaS Demo (Optional)](#11-external-model-maas-demo-optional)
 16. [AI-Assisted Installation](#ai-assisted-installation)
+17. [Appendix F — ArgoCD (Red Hat OpenShift GitOps)](#appendix-f--argocd-red-hat-openshift-gitops)
 
 ---
 
@@ -181,12 +182,6 @@ RHOAI 3.4 requires several operators installed **before** creating the DataScien
 
 > **Note on Service Mesh:** Do **not** install OpenShift Service Mesh 2.x under any circumstances. It is not supported in RHOAI 3.x and its CRDs conflict with the llm-d gateway component. Service Mesh 3.x is only required if you plan to deploy the **Llama Stack Operator** — it is **not** needed for base RHOAI or llm-d.
 
-### 3.0 ArgoCD (Red Hat OpenShift GitOps)
-
-Optional. Not required if applying manifests directly with `helm template | oc apply`.
-
-**CLI commands:** [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation.md)
-
 ### 3.1 Cert-Manager Operator and Let's Encrypt Certificate Issuer
 
 > **AWS credential flow (IRSA):** On AWS, the cert-manager chart (`cloud=aws`) creates a `CredentialsRequest` in `openshift-cloud-credential-operator`. The OpenShift Cloud Credential Operator (CCO) reads this request and automatically provisions a scoped IAM credential into an `aws-creds` Secret in the `cert-manager` namespace. The Secret contains `aws_access_key_id` and `aws_secret_access_key` entries tied to a policy that allows only the Route53 actions needed for DNS-01 challenge solving (`route53:GetChange`, `ChangeResourceRecordSets`, `ListResourceRecordSets`, `ListHostedZonesByName`). No manual AWS credential input is required — CCO handles the full lifecycle. Verify the secret was provisioned: `oc get secret aws-creds -n cert-manager`.
@@ -197,120 +192,9 @@ Set `CLOUD` to **aws** when running on AWS, or **none** for bare metal / non-AWS
 
 > **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reaches `Succeeded`. This is expected. Wait for the CSV, then re-run — it applies cleanly on the second pass.
 
-> **Local CA for non-AWS / bare metal (`cloud=none`):** When Let's Encrypt is not available (no public DNS, lab environments), use the `cert-manager-local-ca` chart to create a local CA chain that issues properly signed certificates for the cluster's API and ingress endpoints. The CA must be injected into the cluster trust bundle afterwards. See [Phase 1 — Local CA alternative](docs/phases/01-tls-cert-automation.md#step-3--alternative-local-ca-non-aws--bare-metal) for the full procedure.
+> **Local CA (`TLS_ISSUER=local-ca`):** Works on any platform, including AWS — useful for labs, demos, or clusters without public DNS. Uses the `cert-manager-local-ca` chart to create a local CA chain that issues properly signed certificates for the cluster's API and ingress endpoints. The CA must be injected into the cluster trust bundle afterwards. See [Phase 1 — Local CA alternative](docs/phases/01-tls-cert-automation.md#step-2--alternative-local-ca) for the full procedure.
 
 **CLI commands:** [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation.md)
-
-<details>
-<summary><strong>Alternative — ArgoCD Application</strong></summary>
-
-ArgoCD needs permission to manage `CredentialsRequest`, `ServiceMonitor`, and cert-manager CRDs before syncing. Apply this ClusterRole and ClusterRoleBinding first:
-
-```bash
-oc apply -f - <<EOF
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: credentialsrequest-manager
-rules:
-- apiGroups:
-  - cloudcredential.openshift.io
-  resources:
-  - credentialsrequests
-  verbs: [get, list, watch, create, update, patch, delete]
-- apiGroups:
-  - monitoring.coreos.com
-  resources:
-  - servicemonitors
-  verbs: [get, list, watch, create, update, patch, delete]
-- apiGroups:
-  - cert-manager.io
-  resources:
-  - clusterissuers
-  - issuers
-  - certificates
-  - certificaterequests
-  - orders
-  - challenges
-  verbs: [get, list, watch, create, update, patch, delete]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: argocd-credentialsrequest-manager
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: credentialsrequest-manager
-subjects:
-- kind: ServiceAccount
-  name: openshift-gitops-argocd-application-controller
-  namespace: openshift-gitops
-EOF
-```
-
-Then create the ArgoCD Application:
-
-```bash
-cat <<EOF | oc apply -f -
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  labels:
-    app: cert-manager-operator
-  name: cert-manager-operator
-  namespace: openshift-gitops
-spec:
-  destination:
-    server: 'https://kubernetes.default.svc'
-  project: default
-  source:
-    path: gitops/operators/cert-manager-operator
-    repoURL: https://github.com/alpha-hack-program/llm-d-guide.git
-    targetRevision: main
-    helm:
-      values: |
-        cloud: ${CLOUD}
-  syncPolicy:
-    automated:
-      prune: false
-      selfHeal: false
-EOF
-```
-
-For Let's Encrypt certificate issuers via ArgoCD:
-
-```bash
-cat <<EOF | oc apply -f -
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  labels:
-    app: cert-manager-route53
-  name: cert-manager-route53
-  namespace: openshift-gitops
-spec:
-  destination:
-    server: 'https://kubernetes.default.svc'
-  project: default
-  source:
-    path: gitops/operators/cert-manager-route53
-    repoURL: https://github.com/alpha-hack-program/llm-d-guide.git
-    targetRevision: main
-    helm:
-      parameters:
-        - name: clusterDomain
-          value: ${CLUSTER_DOMAIN}
-        - name: route53.region
-          value: ${AWS_DEFAULT_REGION}
-  syncPolicy:
-    automated:
-      prune: false
-      selfHeal: false
-EOF
-```
-
-</details>
 
 Verify certificate status:
 
@@ -1893,3 +1777,117 @@ A user's API key is bound to a specific subscription when it is created. Changin
 group membership (and therefore their eligible subscriptions) does **not** re-bind existing
 keys — the old limits remain in effect until the key is revoked and a new one is created under
 the desired subscription.
+
+---
+
+## Appendix F — ArgoCD (Red Hat OpenShift GitOps)
+
+Optional. Not required if applying manifests directly with `helm template | oc apply`. Install ArgoCD only after all six phases are complete.
+
+### RBAC for ArgoCD
+
+ArgoCD needs permission to manage `CredentialsRequest`, `ServiceMonitor`, and cert-manager CRDs before syncing. Apply this ClusterRole and ClusterRoleBinding first:
+
+```bash
+oc apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: credentialsrequest-manager
+rules:
+- apiGroups:
+  - cloudcredential.openshift.io
+  resources:
+  - credentialsrequests
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
+  verbs: [get, list, watch, create, update, patch, delete]
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - clusterissuers
+  - issuers
+  - certificates
+  - certificaterequests
+  - orders
+  - challenges
+  verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argocd-credentialsrequest-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: credentialsrequest-manager
+subjects:
+- kind: ServiceAccount
+  name: openshift-gitops-argocd-application-controller
+  namespace: openshift-gitops
+EOF
+```
+
+### ArgoCD Application — cert-manager Operator
+
+```bash
+cat <<EOF | oc apply -f -
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  labels:
+    app: cert-manager-operator
+  name: cert-manager-operator
+  namespace: openshift-gitops
+spec:
+  destination:
+    server: 'https://kubernetes.default.svc'
+  project: default
+  source:
+    path: gitops/operators/cert-manager-operator
+    repoURL: https://github.com/alpha-hack-program/llm-d-guide.git
+    targetRevision: main
+    helm:
+      values: |
+        cloud: ${CLOUD}
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+EOF
+```
+
+### ArgoCD Application — Let's Encrypt Certificate Issuers
+
+```bash
+cat <<EOF | oc apply -f -
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  labels:
+    app: cert-manager-route53
+  name: cert-manager-route53
+  namespace: openshift-gitops
+spec:
+  destination:
+    server: 'https://kubernetes.default.svc'
+  project: default
+  source:
+    path: gitops/operators/cert-manager-route53
+    repoURL: https://github.com/alpha-hack-program/llm-d-guide.git
+    targetRevision: main
+    helm:
+      parameters:
+        - name: clusterDomain
+          value: ${CLUSTER_DOMAIN}
+        - name: route53.region
+          value: ${AWS_DEFAULT_REGION}
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+EOF
+```

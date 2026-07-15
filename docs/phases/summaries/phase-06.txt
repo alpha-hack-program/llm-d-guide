@@ -1,0 +1,24 @@
+══════════════════════════════════════════════════════════════
+  Phase 6 — Models as a Service (MaaS)
+══════════════════════════════════════════════════════════════
+
+Goal:     Deploy the MaaS gateway, configure Authorino TLS,
+          bootstrap subscriptions, and verify API key creation.
+Time:     ~10-15 min
+
+Order matters:
+  1. Deploy MaaS gateway
+  2. Configure database (maas-db-config secret)
+  3. Enable modelsAsService=true (re-apply RHOAI instance)
+  4. Configure Authorino TLS for MaaS
+     ⚠ Without Authorino TLS, API key endpoint returns 500
+  5. Bootstrap subscription stack
+  6. Verify API key creation via MaaS route
+
+Human gate:
+  - LLMInferenceService shows Ready: True
+  - API key creation returns sk-oai-* key
+  - MaaS dashboard accessible
+
+Guide: docs/phases/06-maas.md
+══════════════════════════════════════════════════════════════

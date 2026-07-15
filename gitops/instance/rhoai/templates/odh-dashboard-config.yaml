@@ -44,6 +44,7 @@ spec:
     disableUserManagement: false
     enablement: true
     genAiStudio: true
+    observabilityDashboard: true
     maasAuthPolicies: {{ if (.Values.modelsAsService | default false) }}true{{ else }}false{{ end }}
     modelAsService: {{ if (.Values.modelsAsService | default false) }}true{{ else }}false{{ end }}
     vLLMDeploymentOnMaaS: {{ if (.Values.modelsAsService | default false) }}true{{ else }}false{{ end }}

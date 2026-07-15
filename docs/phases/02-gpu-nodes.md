@@ -83,8 +83,10 @@ oc get pods -n nvidia-gpu-operator -w
 oc get nodes -o json | jq '.items[].status.capacity | select(."nvidia.com/gpu")'
 ```
 
-**Human gate:** At least one node must show `nvidia.com/gpu` capacity before moving on. If nodes are still provisioning, wait — this can take 10–15 minutes on AWS.
+**Human gate:** Confirm that at least one GPU Machine is `Provisioned` and both operator CSVs are `Succeeded`. You do **not** need to wait for all GPU nodes to be `Ready` or for `nvidia.com/gpu` capacity to appear — Phases 3 and 4 install operators that have no GPU dependency. GPU capacity is only required at Phase 5 (llm-d deployment).
+
+> **Tip:** GPU node provisioning (10–15 min on AWS) and NVIDIA driver installation run in the background while you work through Phases 3–4. By the time you reach Phase 5, nodes will typically be ready. If not, Phase 5 will prompt you to wait.
 
 **Known gotcha:** The ClusterPolicy webhook may reject the CR if the NFD labels aren't present yet. Apply NFD first, wait for labels, then apply nvidia.
 
-**End of Phase 2:** Stop here and report GPU node status to the user. Show the output of the GPU capacity check. Wait for confirmation before proceeding to [Phase 3](03-operators-rhoai.md).
+**End of Phase 2:** Report GPU MachineSet status and operator CSV state to the user. Wait for confirmation before proceeding to [Phase 3](03-operators-rhoai.md).

@@ -32,14 +32,21 @@ oc get pods -n openshift-user-workload-monitoring -w
 ```bash
 oc apply -k gitops/operators/cluster-observability-operator
 
+# The InstallPlan uses Manual approval — approve it automatically (version is pinned):
+IP=$(oc get installplan -n openshift-cluster-observability-operator \
+  -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}')
+[[ -n "$IP" ]] && oc patch installplan "$IP" -n openshift-cluster-observability-operator \
+  --type=merge -p '{"spec":{"approved":true}}'
+
+# Wait for COO CSV
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
+  -n openshift-cluster-observability-operator \
+  -l operators.coreos.com/cluster-observability-operator.openshift-cluster-observability-operator= \
+  --timeout=300s
+
 # Verify COO 1.4.0 is installed
 oc get csv -n openshift-cluster-observability-operator | grep cluster-observability
 # Expected: cluster-observability-operator.v1.4.0   Succeeded
-
-# If you see a pending install plan, approve it:
-# oc get installplan -n openshift-cluster-observability-operator
-# oc patch installplan <install-plan-name> -n openshift-cluster-observability-operator \
-#   --type=merge -p '{"spec":{"approved":true}}'
 ```
 
 ### Step 3 — Enable Perses dashboards in the OpenShift console
