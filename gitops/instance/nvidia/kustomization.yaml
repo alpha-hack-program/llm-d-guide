@@ -3,3 +3,4 @@ kind: Kustomization
 
 resources:
   - clusterpolicy.yaml
+  - dcgm-exporter-servicemonitor.yaml

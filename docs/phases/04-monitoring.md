@@ -85,7 +85,21 @@ oc get uiplugin
 # The console pods will restart automatically (~30s)
 ```
 
-### Step 4 — Deploy Perses dashboard
+### Step 4 — Verify DCGM exporter ServiceMonitor
+
+The Perses dashboard queries `DCGM_FI_DEV_GPU_UTIL`, `DCGM_FI_DEV_POWER_USAGE`, and
+`DCGM_FI_DEV_GPU_TEMP` from the NVIDIA DCGM exporter. A ServiceMonitor for it is included in
+`gitops/instance/nvidia` (applied in Phase 2). Verify it exists:
+
+```bash
+oc get servicemonitor nvidia-dcgm-exporter -n nvidia-gpu-operator
+# Expected: nvidia-dcgm-exporter   <age>
+
+# If missing (e.g. Phase 2 was run before this ServiceMonitor was added), create it:
+# oc apply -k gitops/instance/nvidia
+```
+
+### Step 5 — Deploy Perses dashboard
 
 ```bash
 oc apply -f gitops/instance/llm-d-observability/perses-dashboard-intelligent-inference.yaml
