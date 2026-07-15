@@ -1,0 +1,39 @@
+deploymentType: intelligent-inference
+serviceName: nemotron-nano-9b
+replicas: 1
+
+model:
+  name: nvidia/Nemotron-Nano-8B-v2
+
+storage:
+  type: oci
+  uri: oci://registry.redhat.io/rhelai1/modelcar-nvidia-nemotron-nano-9b-v2-fp8-dynamic:1.5
+
+resources:
+  limits:
+    cpu: "6"
+    memory: 24Gi
+    gpuCount: "1"
+  requests:
+    cpu: "6"
+    memory: 24Gi
+    gpuCount: "1"
+
+hardwareProfile:
+  namespace: redhat-ods-applications
+  name: gpu-profile
+
+vllm:
+  prefixCaching:
+    enabled: auto
+  extraArgs:
+    - "--disable-uvicorn-access-log"
+    - "--enable-auto-tool-choice"
+    - "--tool-call-parser=hermes"
+    - "--trust-remote-code"
+
+maas:
+  enabled: true
+  gateway:
+    name: maas-default-gateway
+    namespace: openshift-ingress
