@@ -12,8 +12,10 @@ Order matters:
   3. Enable modelsAsService=true (re-apply RHOAI instance)
   4. Configure Authorino TLS for MaaS
      ⚠ Without Authorino TLS, API key endpoint returns 500
-  5. Bootstrap subscription stack
-  6. Verify API key creation via MaaS route
+  5. Deploy or publish a model for MaaS
+     (publish existing Phase 5 model OR deploy a new one)
+  6. Bootstrap subscription stack (MaaSSubscription + MaaSAuthPolicy)
+  7. Enable dashboard flags + verify API key creation
 
 Human gate:
   - LLMInferenceService shows Ready: True

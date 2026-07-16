@@ -127,6 +127,7 @@ Deploy the gateway, a namespace, and an LLMInferenceService, then test the endpo
 ### Phase 6 — MaaS
 Deploy the MaaS gateway, configure Authorino TLS, bootstrap the subscription stack, and verify API key creation.
 **Critical:** Order matters: gateway → database → enable `modelsAsService=true` → Authorino TLS. Without Authorino TLS, the API key endpoint returns 500.
+**Authorino TLS race condition:** The `odh-model-controller`'s `gateway-auth-bootstrap` controller does a one-shot check when it sees the gateway annotation — if Authorino TLS is not fully active at that moment, it skips EnvoyFilter creation and never retries. Steps 4a–4c must be verified before applying 4d. If the EnvoyFilter is missing after 4d, restart `odh-model-controller`.
 **Full guide:** [docs/phases/06-maas.md](docs/phases/06-maas.md)
 
 ---
