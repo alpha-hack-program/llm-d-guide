@@ -2,7 +2,7 @@
 
 This file gives assistants (Claude Code, OpenCode, Cursor, and compatible tools) persistent
 context for installing **Red Hat OpenShift AI 3.4** (self-managed) with **llm-d** on
-**OpenShift Container Platform 4.21**. The canonical, step-by-step manual is [`README.md`](README.md);
+**OpenShift Container Platform 4.19+** (llm-d requires 4.20+; tested on 4.21). The canonical, step-by-step manual is [`README.md`](README.md);
 use this runbook for phased execution, wait conditions, and human gates. Work through one phase
 per session. Always tell the assistant which phase you are on and paste any relevant error output
 before asking for help.
@@ -77,7 +77,7 @@ troubleshooting) is in [`docs/reference/`](docs/reference/).
 ## Phase Summaries
 
 ### Phase 0 — Cluster Validation
-Confirm the cluster is ready: OCP 4.21+, cluster admin access, default StorageClass, no ODH or Service Mesh 2.x.
+Confirm the cluster is ready: OCP 4.19+ (llm-d requires 4.20+; tested on 4.21), cluster admin access, default StorageClass, no ODH or Service Mesh 2.x.
 **Critical:** Derive auto-derived variables from the cluster (see table above). Ask the user whether their infrastructure is running on AWS. Then ask whether they want Let's Encrypt or a local CA for TLS (see `TLS_ISSUER` in the Environment Variables table). If on AWS, also ask for `AWS_INSTANCE_TYPE`.
 **Full guide:** [docs/phases/00-validation.md](docs/phases/00-validation.md)
 

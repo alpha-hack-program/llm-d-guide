@@ -1,7 +1,7 @@
 # Red Hat OpenShift AI 3.4 — Installation Manual
 
 **Version:** 3.4 Self-Managed  
-**Target Platform:** OpenShift Container Platform 4.21  
+**Target Platform:** OpenShift Container Platform 4.19+ (llm-d requires 4.20+; tested on 4.21)  
 **Date:** May 2026  
 **Classification:** Internal / Operations
 
@@ -48,7 +48,7 @@ Red Hat OpenShift AI (RHOAI) 3.4 is a self-managed AI/ML platform that provides 
 
 **Additional Features:**
 
-* Distributed Inference with llm-d — GA in RHOAI 3.3 (disaggregated prefill/decode, Inference Gateway, KV-cache-aware routing). **Requires OCP 4.20 or later.**
+* Distributed Inference with llm-d — GA in RHOAI 3.4 (disaggregated prefill/decode, Inference Gateway, KV-cache-aware routing). **Requires OCP 4.20 or later.**
 * Model as a Service — MaaS (governed, rate-limited LLM access via Gateway API and Connectivity Link)
 * Llama Stack Operator (OpenAI-compatible RAG APIs and agentic AI) — *documentation in progress*
 
@@ -57,7 +57,7 @@ Red Hat OpenShift AI (RHOAI) 3.4 is a self-managed AI/ML platform that provides 
 * OpenTelemetry observability (traces, metrics, and logs for RHOAI and model serving components)
 * TLS certificate management (via cert-manager Operator or manual certificate generation)
 
-> **Important:** There is no upgrade path from OpenShift AI 2.x to 3.4. This version requires a fresh installation. For distributed inference with llm-d, OCP 4.20 is required.
+> **Important:** There is no upgrade path from OpenShift AI 2.x to 3.4. This version requires a fresh installation. RHOAI 3.4 supports OCP 4.19+; distributed inference with llm-d requires OCP 4.20+. This guide has been tested on OCP 4.21.
 
 **Official Documentation:**
 
@@ -101,8 +101,8 @@ This repository includes an [`AGENTS.md`](AGENTS.md) file that gives Claude Code
 | 0 | Cluster validation (OCP version, admin access, StorageClass, no conflicting operators) | 5 min |
 | 1 | TLS Certificate Automation — cert-manager + Let's Encrypt for Ingress and API | 15–20 min |
 | 2 | GPU nodes (AWS MachineSets), Node Feature Discovery, NVIDIA GPU Operator | 20–40 min |
-| 3 | Connectivity Link, Leader Worker Set, RHOAI operator, DataScienceCluster | 20–30 min |
-| 4 | Monitoring stack — Tempo, OpenTelemetry, Grafana | 10 min |
+| 3 | Connectivity Link, Leader Worker Set, Tempo, OpenTelemetry, RHOAI operator, DataScienceCluster | 20–30 min |
+| 4 | Monitoring stack — COO, User Workload Monitoring, Perses dashboards | 10 min |
 | 5 | llm-d Quick Start — Gateway, namespace, LLMInferenceService, curl smoke test | 15–20 min |
 | 6 | MaaS — Gateway, Authorino TLS, subscriptions, API key smoke test | 10–15 min |
 
@@ -118,7 +118,7 @@ Paste the failing command and its output into the chat and say which phase you w
 
 | Requirement | Specification |
 | --- | --- |
-| OpenShift Container Platform | **4.20** (required for llm-d) |
+| OpenShift Container Platform | **4.19+** (llm-d requires 4.20+; this guide tested on 4.21) |
 | Worker nodes (base) | Minimum 2 nodes, 8 vCPU / 32 GiB RAM each |
 | Single-node OpenShift | 32 vCPU / 128 GiB RAM |
 | GPU nodes (model serving, llm-d) | NVIDIA A100 / H100 / H200 / A10G / L40S or AMD MI250+ |
@@ -561,7 +561,7 @@ flowchart TD
 | Requirement | Chart / Command |
 | --- | --- |
 | RHOAI 3.4 with `kserve: Managed` and `modelsAsService: Managed` | Step 4 below — re-apply `gitops/instance/rhoai` with `--set modelsAsService=true` **after** gateway and database are ready |
-| Red Hat Connectivity Link v1.2+ installed | `gitops/operators/connectivity-link` |
+| Red Hat Connectivity Link v1.3.x installed | `gitops/operators/connectivity-link` |
 | **Kuadrant CR** in `kuadrant-system` | `gitops/instance/maas/connectivity-link` |
 | cert-manager Operator | `gitops/operators/cert-manager-operator` |
 | LeaderWorkerSet Operator | `gitops/operators/leader-worker-set` |
@@ -784,7 +784,7 @@ oc logs -f -l app.kubernetes.io/component=llminferenceservice-router-scheduler -
 | Supported Hardware Configurations | https://docs.redhat.com/en/documentation/red_hat_ai/3/html/supported_product_and_hardware_configurations/index |
 | llm-d Release Component Versions | https://access.redhat.com/articles/7136620 |
 | NVIDIA GPU Operator on OCP | https://docs.nvidia.com/datacenter/cloud-native/openshift/latest/index.html |
-| cert-manager on OpenShift | https://docs.openshift.com/container-platform/4.20/security/cert_manager_operator/index.html |
+| cert-manager on OpenShift | https://docs.openshift.com/container-platform/4.21/security/cert_manager_operator/index.html |
 | ocp-secured-integration (cert-manager GitOps) | https://github.com/alvarolop/ocp-secured-integration |
 | RHOAI GitOps reference | https://github.com/alvarolop/rhoai-gitops |
 | RHOAI 3.4 MaaS Documentation | https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/govern_llm_access_with_models-as-a-service/ |
