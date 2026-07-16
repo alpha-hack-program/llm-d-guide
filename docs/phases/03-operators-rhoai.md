@@ -1,6 +1,6 @@
 # Phase 3 — Core Operators + RHOAI
 
-> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
 **Goal:** Install Connectivity Link, LeaderWorkerSet, and RHOAI, then configure the DataScienceCluster.
@@ -14,7 +14,7 @@
 **Install order (sequence matters):**
 
 ```
-connectivity-link operator  →  Kuadrant CR (Ready=True, observability enabled)  →  leader-worker-set
+connectivity-link operator  →  Kuadrant CR (observability enabled, Ready deferred to Phase 5)  →  leader-worker-set
                                        ↓
                                  (wait for CRDs)
                                        ↓

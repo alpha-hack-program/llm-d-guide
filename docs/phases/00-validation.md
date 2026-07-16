@@ -1,6 +1,6 @@
 # Phase 0 — Cluster Validation
 
-> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
 **Goal:** Confirm the cluster is ready before installing anything.
@@ -14,7 +14,7 @@
 If any check fails, use these individual commands to diagnose:
 
 ```bash
-# OCP version — must be 4.21+
+# OCP version — must be 4.19+ (llm-d requires 4.20+; tested on 4.21)
 oc version
 
 # Cluster admin access

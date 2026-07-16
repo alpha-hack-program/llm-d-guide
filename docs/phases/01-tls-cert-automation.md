@@ -1,9 +1,9 @@
 # Phase 1 — TLS Certificate Automation
 
-> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
-**Goal:** Install the GitOps operator and automate TLS certificate lifecycle.
+**Goal:** Install the cert-manager operator and automate TLS certificate lifecycle.
 
 **Before starting Phase 1 — confirm two variables with the user:**
 

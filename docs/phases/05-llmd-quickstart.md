@@ -1,6 +1,6 @@
 # Phase 5 — llm-d Quick Start
 
-> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
 **Goal:** Deploy the gateway, a namespace, and an LLMInferenceService, then test the endpoint.
@@ -426,7 +426,7 @@ oc exec -n openshift-user-workload-monitoring prometheus-user-workload-0 -- \
 
 - **No metrics in Prometheus:** Check User Workload Monitoring is enabled (see pre-flight checks above).
 
-For complete monitoring setup and troubleshooting, see: [MONITORING-INTEGRATION.md](../../MONITORING-INTEGRATION.md)
+For complete monitoring setup and troubleshooting, see: [LLM-D-MONITORING-INTEGRATION.md](../../gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md)
 
 ---
 

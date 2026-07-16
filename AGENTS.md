@@ -1,4 +1,4 @@
-# AGENTS.md — llm-d-guide Co-pilot Runbook]
+# AGENTS.md — llm-d-guide Co-pilot Runbook
 
 This file gives assistants (Claude Code, OpenCode, Cursor, and compatible tools) persistent
 context for installing **Red Hat OpenShift AI 3.4** (self-managed) with **llm-d** on

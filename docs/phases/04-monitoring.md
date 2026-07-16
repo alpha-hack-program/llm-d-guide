@@ -1,6 +1,6 @@
 # Phase 4 — Monitoring Stack
 
-> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
 **Goal:** Extend the basic monitoring stack with llm-d Perses dashboards surfaced directly in the OpenShift console.
@@ -114,7 +114,7 @@ oc apply -f gitops/instance/llm-d-observability/perses-dashboard-intelligent-inf
 For complete setup and troubleshooting:  
 [gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md](../../gitops/instance/llm-d-observability/LLM-D-MONITORING-INTEGRATION.md)
 
-### Step 5 — Verify RHOAI dashboard monitoring drawer
+### Step 6 — Verify RHOAI dashboard monitoring drawer
 
 The RHOAI dashboard has an integrated monitoring view gated by the `observabilityDashboard` flag. This flag is automatically set to `true` by the RHOAI instance Helm template applied in Phase 3 Step 5. Verify it's enabled:
 

@@ -1,6 +1,6 @@
 # Phase 6 — MaaS
 
-> Part of the [llm-d-guide Co-pilot Runbook]](../../AGENTS.md). See the
+> Part of the [llm-d-guide Co-pilot Runbook](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 > See also: [MaaS Troubleshooting](../reference/maas-troubleshooting.md) |
 > [ExternalModel Guide](../reference/external-models.md)
@@ -331,7 +331,7 @@ curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
 - Gen AI studio → API keys or Settings → Authorization policies tabs missing in the dashboard: check all MaaS `OdhDashboardConfig` flags (`genAiStudio`, `modelAsService`, `maasAuthPolicies`, `vLLMDeploymentOnMaaS`) — `vLLMDeploymentOnMaaS` is the most commonly missing one.
 - `LLMInferenceService` `HTTPRoutesReady: False` — `NotAllowedByListeners`: model namespace not in `gateway.modelNamespaces`. Re-apply the gateway chart with the correct namespace set.
 - `MaaSAuthPolicy` status loop in controller logs (`"failed to update MaaSAuthPolicy status"`) — harmless controller/CRD version mismatch. Auth and rate limiting work correctly despite this.
-- **EA2 → stable 3.4 migration only:** If `maas-controller` or `maas-api` Deployment shows an immutable selector error in the DSC, delete both Deployments and force a DSC reconcile — see `PATCH-MAAS.md §8`.
+- **EA2 → stable 3.4 migration only:** If `maas-controller` or `maas-api` Deployment shows an immutable selector error in the DSC, delete both Deployments and force a DSC reconcile.
 
 For more MaaS troubleshooting, see: [MaaS Troubleshooting Reference](../reference/maas-troubleshooting.md)
 

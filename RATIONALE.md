@@ -29,7 +29,7 @@ Installing it for production-grade LLM serving involves several layers:
 │  GPU hardware stack                                     │  ← bare metal concern
 │  NFD · NVIDIA GPU Operator · MachineSets                │
 ├─────────────────────────────────────────────────────────┤
-│  OpenShift Container Platform 4.21                      │  ← the foundation
+│  OpenShift Container Platform 4.19+                     │  ← the foundation
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -44,9 +44,10 @@ conflicting operators (ODH, Service Mesh 2.x) are pre-installed.
 
 **Why:**
 
-- **OCP 4.21+ is required.** llm-d uses the OpenShift built-in Gateway API controller
-  (`openshift.io/gateway-controller/v1`), which only ships in OCP 4.20+. RHOAI 3.4 is
-  validated on 4.21. Running on an older version fails silently at the gateway step.
+- **OCP 4.19+ is required (llm-d requires 4.20+; tested on 4.21).** RHOAI 3.4 requires
+  OCP 4.19+. llm-d uses the OpenShift built-in Gateway API controller
+  (`openshift.io/gateway-controller/v1`), which only ships in OCP 4.20+. Running on an
+  older version fails silently at the gateway step.
 
 - **No ODH / no Service Mesh 2.x.** Open Data Hub and RHOAI share many CRDs. Running both
   causes reconciliation conflicts. Service Mesh 2.x ships its own Envoy proxy which conflicts
@@ -63,16 +64,6 @@ conflicting operators (ODH, Service Mesh 2.x) are pre-installed.
 ---
 
 ## Phase 1 — TLS Certificate Automation
-
-### ArgoCD (Red Hat OpenShift GitOps)
-
-**What:** Install the OpenShift GitOps operator, which deploys an ArgoCD instance.
-
-**Why:** ArgoCD provides GitOps-based continuous delivery. For this installation we use
-`helm template | oc apply` directly, but ArgoCD is installed because:
-1. The cert-manager chart uses it to install ClusterIssuers via an `Application` CR.
-2. Once handed over to a team, ArgoCD is the day-2 operations tool for keeping cluster state
-   in sync with Git.
 
 ### cert-manager (`cloud=aws` or `cloud=none`)
 
@@ -95,6 +86,24 @@ provision a scoped IAM secret (`aws-creds`) with Route53 permissions.
 - **Two-pass apply.** The `CertManager` CR is part of the same Helm chart, but its CRD is only
   registered once the operator's CSV reaches `Succeeded`. The first apply always errors on the
   CR — this is expected. The second pass (after waiting for the CSV) applies cleanly.
+
+### Local CA alternative (`TLS_ISSUER=local-ca`)
+
+**What:** Instead of Let's Encrypt, create a local CA chain using cert-manager: a self-signed
+root bootstraps a CA certificate, which then issues properly signed certs for the cluster's
+API and ingress endpoints. After issuing, inject the CA into the cluster trust bundle via the
+`user-ca-bundle` ConfigMap and Proxy patch.
+
+**Why:**
+
+- **Works on any platform.** Let's Encrypt requires AWS Route53 (DNS-01 challenges). A local
+  CA works on bare metal, non-AWS clouds, air-gapped environments, and AWS clusters without
+  public DNS access — useful for labs, demos, or restricted environments.
+
+- **The trust bundle injection is mandatory.** Without it, cluster components (including the
+  MaaS `maas-ui` sidecar) reject the locally-signed certificates. RHOAI automatically merges
+  the `user-ca-bundle` ConfigMap into the `odh-trusted-ca-bundle` and `odh-ca-bundle`
+  ConfigMaps mounted by its components.
 
 ### Let's Encrypt certificates
 
@@ -245,14 +254,20 @@ llm-d components.
   node selector to use and what GPU resources to request. Without them the dashboard's
   "deploy model" flow has no GPU option to present.
 
-### Monitoring stack (Tempo + OTel + Grafana)
+### Monitoring stack (Tempo + OpenTelemetry)
 
-**What:** Install three operators as part of Phase 3:
+**What:** Install two operators as part of Phase 3:
 - **Tempo Operator** — distributed tracing backend (stores and queries traces)
 - **OpenTelemetry Operator** — OTel collector (receives spans from RHOAI components)
-- **Grafana Operator** — optional dashboard UI (visualizes metrics and traces via Grafana instance)
+
+An optional **Grafana Operator** can also be installed for custom dashboards, but the primary
+dashboard path uses COO + Perses in Phase 4 (no Grafana required).
 
 **Why install these in Phase 3 rather than later?**
+
+- **Tempo and OpenTelemetry must be installed BEFORE RHOAI.** The RHOAI
+  `DSCInitialization` requires these operators to be present when it initializes the
+  monitoring stack. Installing them after RHOAI causes the monitoring reconciliation to fail.
 
 - **Observability is cheaper to add now than after a model is live.** Adding tracing after a
   model is in production requires restarting pods and risks a brief outage. Installing the
@@ -330,7 +345,9 @@ KServe) or the namespace doesn't appear in the dashboard's project selector.
 - `storage.type: oci` — pulls model weights from an OCI image (`registry.redhat.io`)
 - `replicas: 2` — two vLLM pods for throughput and resilience
 - `gpuCount: 1` per pod — one A10G GPU each
-- `VLLM_ADDITIONAL_ARGS` — enables tool calling and disables verbose access logs
+- `vllm.extraArgs` — enables tool calling and disables verbose access logs (the chart
+  auto-generates `VLLM_ADDITIONAL_ARGS` from this field; setting the env var directly
+  causes a duplicate-env admission error)
 
 **Why:**
 
@@ -420,19 +437,21 @@ pod manually.
 2. Patch the `Authorino` CR to enable TLS with that cert secret.
 3. Set `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` env vars on the Authorino deployment so it
    trusts the cluster CA bundle.
-4. Remove and re-add the `security.opendatahub.io/authorino-tls-bootstrap=true` annotation
-   on the MaaS gateway.
+4. Annotate the MaaS gateway with
+   `security.opendatahub.io/authorino-tls-bootstrap=true` to trigger EnvoyFilter creation.
 
 **Why:**
 
 - **Envoy requires TLS to talk to Authorino.** The Envoy proxy inside the MaaS gateway calls
   Authorino's gRPC port 50051 to validate every API key. The `EnvoyFilter` named
-  `maas-default-gateway-authn-ssl` (created by `maas-controller` in response to the gateway
-  annotation) configures the Envoy cluster to use TLS.
+  `maas-default-gateway-authn-ssl` (created by `odh-model-controller`'s `gateway-auth-bootstrap`
+  controller in response to the gateway annotation) configures the Envoy cluster to use TLS.
 
-- **Why remove and re-add the annotation?** The `maas-controller` only reacts to annotation
-  *change events*, not to the annotation's presence at steady state. Remove then re-add forces
-  a new change event, causing the controller to regenerate the `EnvoyFilter` with TLS settings.
+- **Steps 4a–4c must be fully verified before annotating the gateway (4d).** The
+  `odh-model-controller` performs a **one-shot check** when it sees the gateway annotation —
+  if Authorino TLS is not fully active at that moment, it logs "Authorino has TLS disabled,
+  skipping EnvoyFilter creation" and **never retries**. If the EnvoyFilter is missing after
+  annotation, restarting `odh-model-controller` forces re-reconciliation.
 
 - **Without this, `POST /maas-api/v1/api-keys` returns 500.** Envoy tries to connect to
   Authorino's gRPC port over plain TCP, Authorino answers with a TLS handshake, Envoy closes
