@@ -22,7 +22,7 @@ metadata:
   namespace: openshift-tempo-operator
 spec:
   channel: stable
-  installPlanApproval: Automatic
+  installPlanApproval: Manual
   name: tempo-product
   source: redhat-operators
   sourceNamespace: openshift-marketplace

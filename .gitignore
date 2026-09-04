@@ -11,3 +11,7 @@ old
 resume.claude.*
 archive/
 legacy*/
+cluster.env
+.cluster.env.swp
+*.swp
+.maas-db-password

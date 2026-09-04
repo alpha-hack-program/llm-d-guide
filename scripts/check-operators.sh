@@ -43,7 +43,37 @@ check_operator() {
 echo "=== Checking Required Operators (OCP 4.${OCP_MINOR}) ==="
 
 check_operator "Cert Manager" "cert-manager" "cert-manager-operator" "cert-manager-operator"
-check_operator "Connectivity Link" "rhcl-operator" "openshift-operators" "rhcl-operator"
+
+echo -n "Connectivity Link: "
+if oc get csv -n openshift-operators 2>/dev/null | grep -q "rhcl-operator"; then
+  rhcl_ver=$(oc get csv -n openshift-operators -o jsonpath='{.items[?(@.spec.displayName=="Red Hat Connectivity Link")].spec.version}' 2>/dev/null)
+  if [[ "$rhcl_ver" =~ ^1\.3\.([0-9]+)$ ]]; then
+    patch="${BASH_REMATCH[1]}"
+    if (( patch >= 5 )); then
+      echo "OK (OLMv0, ${rhcl_ver})"
+    else
+      echo "WARN: ${rhcl_ver} installed (RHOAI 3.5 requires >= 1.3.5 — see docs/reference/rhcl-version-pin.md)"
+      FAILURES=$((FAILURES + 1))
+    fi
+  elif [[ -n "$rhcl_ver" ]]; then
+    echo "WARN: ${rhcl_ver} installed (pin is 1.3.x >= 1.3.5 — see docs/reference/rhcl-version-pin.md)"
+    FAILURES=$((FAILURES + 1))
+  else
+    echo "OK (OLMv0)"
+  fi
+elif oc get clusterextension rhcl-operator &>/dev/null; then
+  installed=$(oc get clusterextension rhcl-operator -o jsonpath='{.status.conditions[?(@.type=="Installed")].status}' 2>/dev/null)
+  if [[ "${installed}" == "True" ]]; then
+    echo "OK (OLMv1 — verify RHCL CSV >= 1.3.5 with oc get csv -n openshift-operators | grep rhcl)"
+  else
+    echo "INSTALLING (OLMv1 — Installed=${installed})"
+    FAILURES=$((FAILURES + 1))
+  fi
+else
+  echo "MISSING"
+  FAILURES=$((FAILURES + 1))
+fi
+
 check_operator "OpenShift AI" "rhods" "redhat-ods-operator" "rhods-operator"
 # LeaderWorkerSet, NFD, NVIDIA: OLMv0 only (bundles don't support AllNamespaces)
 check_operator "Leader Worker Set" "leader-worker-set" "openshift-lws-operator" ""

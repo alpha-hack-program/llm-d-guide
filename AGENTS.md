@@ -16,7 +16,7 @@ troubleshooting) is in [`docs/reference/`](docs/reference/).
 - **Explain before executing.** Before each major step (operator installs, chart applies, config changes), briefly explain what it does and why. Wait for the user to confirm before running it.
 - **Never skip optional steps without asking.** If a step is marked optional, ask the user whether to include or skip it.
 - **Ask questions directly.** The user is an experienced operator — don't enumerate options with descriptions or explanations. Just ask plainly (e.g., "What cloud provider — `aws` or `none`?"), don't present numbered lists explaining what each choice means.
-- **Optional tools go at the end.** ArgoCD (OpenShift GitOps) is the only optional add-on. Don't ask about it during any phase — offer it once after Phase 6 completes: "Do you want to install any additional tools, like ArgoCD?"
+- **Optional tools go at the end.** ArgoCD (OpenShift GitOps) is the only optional add-on. Don't ask about it during any phase — offer it once after Phase 6 completes: "Do you want to install any additional tools, like ArgoCD?" Optional demos after Phase 6: [MaaS demo](docs/demos/maas-demo.md) → [EvalHub Level 1](docs/demos/evalhub-demo.md) → [EvalHub Level 2](docs/demos/evalhub-demo-level2.md).
 
 ---
 
@@ -27,6 +27,16 @@ troubleshooting) is in [`docs/reference/`](docs/reference/).
 ---
 
 ## Environment Variables
+
+### Optional local env file
+
+Copy [`cluster.env.example`](cluster.env.example) to `cluster.env` (gitignored), set user choices, and
+`source ./cluster.env` at the start of each shell session. Sourcing auto-derives `CLUSTER_DOMAIN`,
+`AWS_REGION`, `INFRA_ID`, and `AMI_ID` when `oc` is logged in with sufficient access.
+
+Assistants: if `cluster.env` exists, remind the user to source it. Prefer values already set in the
+environment over re-asking, but **still confirm** `CLOUD` and `TLS_ISSUER` when unset — never invent
+them from example defaults. Do not commit `cluster.env` (it may contain `HF_TOKEN`).
 
 ### Auto-derived — run these commands, never ask the user
 
@@ -99,9 +109,10 @@ Add GPU worker nodes and install hardware detection and driver stack.
 **Full guide:** [docs/phases/02-gpu-nodes.md](docs/phases/02-gpu-nodes.md)
 
 ### Phase 3 — Core Operators + RHOAI
-Install Connectivity Link (RHCL 1.3.5+), LeaderWorkerSet, **monitoring operators (Tempo, OpenTelemetry)**, and RHOAI, then configure the DataScienceCluster.
+Install Connectivity Link (RHCL 1.3.5+, pinned to v1.3.6), LeaderWorkerSet, **monitoring operators (Tempo, OpenTelemetry)**, and RHOAI, then configure the DataScienceCluster.
 **Critical:** 
 - **Operator install order matters:** Connectivity Link → LeaderWorkerSet → **Tempo + OpenTelemetry (BEFORE RHOAI)** → RHOAI Operator → RHOAI Instance. The monitoring operators must be installed BEFORE RHOAI because the DSCInitialization requires them for monitoring stack initialization.
+- **RHCL InstallPlan approvals:** Use `./scripts/approve-rhcl-installplan.sh` only — never bulk-approve all pending plans in `openshift-operators`. See [RHCL version pin](docs/reference/rhcl-version-pin.md).
 - **OLMv0 vs OLMv1:** For compatible plain-YAML operators (Connectivity Link), apply `cluster-extension.yaml` on OCP 4.21+ or `operator.yaml` on 4.20. **LeaderWorkerSet does not support AllNamespaces mode** — always use `oc apply -k gitops/operators/leader-worker-set` (OLMv0) regardless of OCP version. **Tempo and OpenTelemetry must also use OLMv0** — RHOAI 3.5's monitoring controller detects these operators via CSV; OLMv1 installs are invisible, causing the monitoring precondition to fail. For RHOAI (Helm chart), pass `--set olmVersion=v1` on 4.21+. Wait conditions differ: on 4.20, wait for `CSV Succeeded`; on 4.21+, wait for `ClusterExtension` condition `Installed=True` (for OLMv1 operators) or `CSV Succeeded` (for OLMv0 operators like LeaderWorkerSet, Tempo, OpenTelemetry).
 - Enable Kuadrant observability (`spec.observability.enable: true`) when creating the Kuadrant CR — required for the monitoring stack in Phase 4.
 - Do NOT install Kueue unless explicitly required. 
@@ -150,7 +161,10 @@ Deploy the MaaS gateway, configure Authorino TLS, bootstrap the subscription sta
 - [OLMv1 Migration](docs/reference/olmv1-migration.md) — ClusterExtension CRD, RBAC, catalog mapping, wait conditions (load when `OCP_MINOR >= 21`)
 - [Validation Commands](docs/reference/validation.md) — `oc get` checks for operators, CRDs, gateways, MaaS
 - [MaaS Troubleshooting](docs/reference/maas-troubleshooting.md) — Key facts, gotchas, token rate limiting, dashboard flags
+- [RHCL version pin](docs/reference/rhcl-version-pin.md) — InstallPlan guardrails and downgrade
 - [ExternalModel Guide](docs/reference/external-models.md) — Credential injection, MaaSModelRef naming, monitoring
+- [EvalHub Demo — Level 1](docs/demos/evalhub-demo.md) — GuideLLM performance comparison on MaaS
+- [EvalHub Demo — Level 2](docs/demos/evalhub-demo-level2.md) — CI/CD quality gate + OCI artifacts
 - [Migration 3.4 → 3.5](docs/reference/migration-3.4-to-3.5.md) — Breaking changes, MaaS namespace move, vLLM flag deprecation, upgrade checklist
 
 ---

@@ -261,9 +261,9 @@ spec:
   modelRefs:
   - name: <MODEL_MAAS_NAME>         # MaaSModelRef name from oc get maasmodelref (e.g. qwen3-8b-maas)
     namespace: <MODEL_NAMESPACE>     # e.g. llm-d-demo
-    tokenRateLimits:                # REQUIRED field, per-model
-    - window: 24h                   # Window: s, m, h (NOT d - use 24h instead)
-      limit: 1000                   # Token count limit for this window
+    tokenRateLimits:                # REQUIRED field, per-model (cannot omit)
+    - window: 9999h                 # Lab/eval: use a very high ceiling (MaaS has no "unlimited")
+      limit: 999999999              # Production: set per-tier limits (e.g. 100000 / 1h)
 EOF
 
 # Create MaaSAuthPolicy (grants groups access to models)
@@ -290,6 +290,7 @@ EOF
 - `owner.groups` is a **list of objects** with `kind: Group` + `name`, NOT a list of strings
 - `tokenRateLimits` is **required on each modelRef**, with `window` and `limit` fields
 - `window` units: `s`, `m`, `h` only — `d` is not supported, use `24h`
+- **Do not use `1000` / `24h` for eval workloads** — a single lm-eval benchmark (e.g. `leaderboard_ifeval`, ~541 requests) or Garak scan will hit **HTTP 429** within minutes. Use `1h` windows with limits in the hundreds of thousands or millions for demos; tighten per tier in production.
 - `subjects.groups` in MaaSAuthPolicy must match `owner.groups` in MaaSSubscription
 
 See README §9.2 Step 7 for multi-tier examples with different limits per group.

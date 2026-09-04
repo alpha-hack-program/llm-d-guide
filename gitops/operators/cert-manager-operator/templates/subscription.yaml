@@ -12,7 +12,7 @@ spec:
   name: openshift-cert-manager-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
-  installPlanApproval: Automatic
+  installPlanApproval: Manual
   config:
     tolerations:
       - key: node-role.kubernetes.io/infra

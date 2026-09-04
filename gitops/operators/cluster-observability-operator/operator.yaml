@@ -24,7 +24,7 @@ metadata:
   namespace: openshift-cluster-observability-operator
 spec:
   channel: stable
-  installPlanApproval: Automatic
+  installPlanApproval: Manual  # Manual approval required to prevent surprise upgrades
   name: cluster-observability-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace

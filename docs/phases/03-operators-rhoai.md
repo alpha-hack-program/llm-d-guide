@@ -31,24 +31,30 @@ connectivity-link operator  →  Kuadrant CR (observability enabled, Ready defer
 
 ### Step 1 — Connectivity Link (RHCL operator — Authorino + Limitador + Kuadrant CRDs)
 
-> **RHCL 1.3.5+ (RHOAI 3.5):** RHCL 1.3.5 or later is required for RHOAI 3.5. The Wasm shim bug
-> that required pinning to v1.3.4 in RHOAI 3.4 has been fixed in 1.3.5. The operator subscription
-> in `gitops/operators/connectivity-link` no longer pins to a specific CSV — it tracks the
-> `stable` channel with no version pin and picks up the latest release automatically.
+> **RHCL version pinning (RHOAI 3.5):** RHCL **1.3.5+** is required (Wasm shim bug fixed in 1.3.5).
+> The subscription in `gitops/operators/connectivity-link` pins to **v1.3.6** on `stable` with
+> `installPlanApproval: Manual`. Use `./scripts/approve-rhcl-installplan.sh` — never bulk-approve
+> all pending InstallPlans in `openshift-operators`. See [RHCL version pin](../reference/rhcl-version-pin.md).
 
 ```bash
 # OCP 4.20 (OLMv0):
 oc apply -k ./gitops/operators/connectivity-link
-# InstallPlan may require manual approval due to dependencies
-oc get installplan -n openshift-operators | grep -i "requiresapproval"
-# If an InstallPlan is pending, approve it:
-# oc patch installplan <NAME> -n openshift-operators --type merge -p '{"spec":{"approved":true}}'
-oc get csv -n openshift-operators -w | grep -E "rhcl|authorino|limitador"
+
+# InstallPlan uses Manual approval. NEVER bulk-approve every plan in openshift-operators.
+./scripts/approve-rhcl-installplan.sh          # list pending; REJECT = do not approve
+./scripts/approve-rhcl-installplan.sh --approve # approve only safe 1.3.x RHCL/Kuadrant plans
+
+oc wait --for=jsonpath='{.status.phase}'=Succeeded \
+  csv/rhcl-operator.v1.3.6 -n openshift-operators --timeout=600s
+oc get csv -n openshift-operators | grep -E 'rhcl|authorino|limitador|dns'
+# RHCL must be v1.3.6 (or another 1.3.x CSV >= 1.3.5). See docs/reference/rhcl-version-pin.md
 
 # OCP 4.21+ (OLMv1):
 oc apply -f gitops/operators/connectivity-link/cluster-extension.yaml
 oc wait --for='jsonpath={.status.conditions[?(@.type=="Installed")].status}=True' \
   clusterextension/rhcl-operator --timeout=300s
+# Verify RHCL CSV >= 1.3.5 after OLMv1 install:
+oc get csv -n openshift-operators | grep rhcl
 
 # Wait for AuthPolicy CRD (both OLMv0 and OLMv1)
 oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
@@ -326,10 +332,12 @@ oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator \
 ---
 
 **Human gates:**
-- **InstallPlan approvals:** Some operators require manual approval. The assistant should check and list pending plans, but you must confirm before it patches them.
+- **RHCL InstallPlan approvals:** Use `./scripts/approve-rhcl-installplan.sh` only — never bulk-approve all pending plans in `openshift-operators`. See [RHCL version pin](../reference/rhcl-version-pin.md).
+- **Other InstallPlan approvals:** List pending plans per operator namespace; confirm before patching (COO, Tempo, RHOAI, etc. each have their own phase steps).
 - **CSV verification:** Run `./scripts/check-operators.sh` at the end. All required operators must be `Succeeded` before proceeding.
 
 **Known gotchas:**
+- **RHCL below 1.3.5 or upgraded to 1.4.x despite pin:** `startingCSV` does not block channel upgrades. Downgrade: [RHCL version pin](../reference/rhcl-version-pin.md).
 - **Connectivity Link install location:** The RHCL operator subscription is in `openshift-operators` (all-namespaces mode), NOT in `kuadrant-system`. The `kuadrant-system` namespace is created by the `Kuadrant` CR (`gitops/instance/maas/connectivity-link`) — it does not exist before that CR is applied.
 - Apply connectivity-link first — Authorino must be running before RHOAI configures authentication.
 - After the RHCL operator is ready, create the Kuadrant CR: `helm template gitops/instance/maas/connectivity-link --name-template maas-connectivity-link | oc apply -f -`. Without this CR, Authorino and Limitador pods are not deployed and MaaS auth/rate-limiting is silently unenforced.

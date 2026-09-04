@@ -19,7 +19,8 @@ Install method by operator:
 
   1. Connectivity Link → wait for operator ready
      → Create Kuadrant CR (Authorino + Limitador)
-     ℹ RHCL 1.3.5+ required (Wasm bug fixed in 1.3.5; no version pin)
+     ℹ RHCL 1.3.5+ required; pin v1.3.6 + Manual InstallPlan approval
+     ℹ Use ./scripts/approve-rhcl-installplan.sh (never bulk-approve openshift-operators)
      ⚠ Kuadrant Ready=False is EXPECTED (no GatewayClass yet)
   2. LeaderWorkerSet (always OLMv0) → wait CRD
   3. Tempo + OpenTelemetry (always OLMv0) → wait CSVs Succeeded

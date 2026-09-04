@@ -8,11 +8,13 @@ A self-contained walkthrough showing token rate-limit enforcement across three t
 
 **Tier layout:**
 
-| Tier | Group | User | Limit | Window | Effect |
-|---|---|---|---|---|---|
-| freemium | `freemium-users` | charlie | 300 tokens | 5 min | Exhausted after ~3 short requests |
-| pro | `pro-users` | bob | 3 000 tokens | 5 min | ~30 requests — not exhausted in demo |
-| premium | `premium-users` | alice | 30 000 tokens | 5 min | Effectively unlimited |
+
+| Tier     | Group            | User    | Limit         | Window | Effect                               |
+| -------- | ---------------- | ------- | ------------- | ------ | ------------------------------------ |
+| freemium | `freemium-users` | charlie | 300 tokens    | 5 min  | Exhausted after ~3 short requests    |
+| pro      | `pro-users`      | bob     | 3 000 tokens  | 5 min  | ~30 requests — not exhausted in demo |
+| premium  | `premium-users`  | alice   | 30 000 tokens | 5 min  | Effectively unlimited                |
+
 
 5-minute windows make the demo repeatable — limits reset without any manual cleanup.
 
@@ -49,6 +51,9 @@ set -H
 # Update the secret and restart OAuth (~30 s)
 echo "Update secret: ${SECRET_NAME} in namespace: openshift-config with file: /tmp/htpasswd.current"
 cat /tmp/htpasswd.current
+# Commit the change to cluster
+oc create secret generic $SECRET_NAME -n openshift-config  --from-file=htpasswd=/tmp/htpasswd.current   --dry-run=client -o yaml | oc apply -f -
+
 ```
 
 **Create OCP groups and assign users:**
@@ -62,7 +67,7 @@ oc adm groups add-users pro-users      bob
 oc adm groups add-users premium-users  alice
 ```
 
-**Ensure the `MaaSModelRef` for `qwen3-8b` exists:**
+**Ensure the** `MaaSModelRef` **for** `qwen3-8b` **exists:**
 
 The `MaaSSubscription` controller resolves model references at creation time — if the
 `MaaSModelRef` is missing the subscriptions enter `Failed` phase immediately.
@@ -186,10 +191,13 @@ EOF
 ```bash
 oc get tokenratelimitpolicy -n llm-d-demo
 # Expected: maas-trlp-qwen3-8b
+
+oc get tokenratelimitpolicy maas-trlp-qwen3-8b -n llm-d-demo -o yaml
 ```
 
-```bash
-$ oc get tokenratelimitpolicy maas-trlp-qwen3-8b -n llm-d-demo -o yaml
+Expected output (for inspection only):
+
+```yaml
 apiVersion: kuadrant.io/v1alpha1
 kind: TokenRateLimitPolicy
 metadata:
@@ -266,6 +274,7 @@ status:
 Each user gets their own kubeconfig so the admin session is never interrupted.
 
 **Admin terminal — resolve cluster coordinates first:**
+
 ```bash
 OCP_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 OCP_API="https://api.${OCP_DOMAIN#apps.}:6443"
@@ -276,6 +285,7 @@ printf 'OCP_API="%s"\nMAAS_GW="%s"\n' "${OCP_API}" "${MAAS_GW}"
 Copy the two printed lines and paste them at the top of each user terminal below.
 
 **Terminal — alice:**
+
 ```bash
 OCP_API="<paste value>"
 MAAS_GW="<paste value>"
@@ -290,7 +300,10 @@ ALICE_KEY=$(curl -sk -X POST "https://${MAAS_GW}/maas-api/v1/api-keys" \
 echo "export ALICE_KEY=${ALICE_KEY}"
 ```
 
+
+
 **Terminal — bob:**
+
 ```bash
 OCP_API="<paste value>"
 MAAS_GW="<paste value>"
@@ -306,6 +319,7 @@ echo "export BOB_KEY=${BOB_KEY}"
 ```
 
 **Terminal — charlie:**
+
 ```bash
 OCP_API="<paste value>"
 MAAS_GW="<paste value>"
@@ -321,17 +335,21 @@ echo "export CHARLIE_KEY=${CHARLIE_KEY}"
 ```
 
 **Admin terminal — paste the three export lines printed above, then set demo variables:**
+
 ```bash
 OCP_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 MAAS_GW="maas.${OCP_DOMAIN}"
 # paste export ALICE_KEY=... BOB_KEY=... CHARLIE_KEY=... here
 ```
 
+
+
 ## Demo Run
 
 Run everything below in the **admin terminal** (the one where you pasted the `export *_KEY=` lines).
 
 **Set demo variables (admin terminal):**
+
 ```bash
 OCP_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
 MAAS_GW="maas.${OCP_DOMAIN}"
@@ -364,6 +382,7 @@ call_model() {
 **Act 1 — Charlie (freemium) exhausts quota:**
 
 *Terminal — charlie:*
+
 ```bash
 echo "=== Act 1: Charlie (freemium, 300 tokens / 5 min) ==="
 COUNT=0
@@ -378,6 +397,7 @@ Expected: fails after 3-4 calls as the 300-token window fills.
 **Act 2 — Bob (pro) and Alice (premium) for contrast:**
 
 *Terminal — bob:*
+
 ```bash
 echo "=== Act 2: Bob (pro) ==="
 for i in 1 2 3 4 5; do
@@ -387,6 +407,7 @@ done
 ```
 
 *Terminal — alice:*
+
 ```bash
 echo "=== Act 2: Alice (premium) ==="
 for i in 1 2 3 4 5; do
@@ -398,13 +419,15 @@ done
 **Act 3 — Migrate Charlie: freemium -> pro:**
 
 *Admin terminal — move charlie to the pro group:*
+
 ```bash
 echo "=== Act 3: Migrating charlie from freemium to pro ==="
-oc adm groups remove-users freemium charlie
-oc adm groups add-users pro charlie
+oc adm groups remove-users freemium-users charlie
+oc adm groups add-users pro-users charlie
 ```
 
 *Terminal — charlie — revoke the old freemium key, then create a new one bound to pro-subscription:*
+
 ```bash
 # Keys are bound to a subscription at creation time — the old freemium key would still
 # enforce freemium limits even after the group change. Revoke it first.
@@ -425,6 +448,7 @@ echo "export CHARLIE_PRO_KEY=${CHARLIE_PRO_KEY}"
 ```
 
 *Admin terminal — paste the export line printed above:*
+
 ```bash
 export CHARLIE_PRO_KEY="sk-oai-..."
 ```
@@ -432,6 +456,7 @@ export CHARLIE_PRO_KEY="sk-oai-..."
 **Act 4 — Charlie (pro) succeeds:**
 
 *Terminal — charlie:*
+
 ```bash
 echo "=== Act 4: Charlie (now pro, 3000 tokens / 5 min) ==="
 for i in 1 2 3 4 5; do
@@ -448,11 +473,14 @@ echo "Charlie is no longer rate-limited."
 > **and** revoke their existing keys. Only then will new keys bind to the lower-tier subscription.
 >
 > To revoke a key by ID (admin terminal):
+>
 > ```bash
 > curl -sk -X DELETE "https://${MAAS_GW}/maas-api/v1/api-keys/<key-id>" \
 >   -H "Authorization: Bearer $(oc whoami -t)"
 > # Returns the key object with "status": "revoked"; subsequent requests with it get 403.
 > ```
+
+
 
 ## Reset / Cleanup
 

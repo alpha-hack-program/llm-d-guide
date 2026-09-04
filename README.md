@@ -21,8 +21,10 @@
 10. [MaaS Demo (Optional)](docs/demos/maas-demo.md)
 11. [External Model MaaS Demo (Optional)](docs/demos/external-model-demo.md)
 12. [Full MaaS Reset](docs/demos/maas-reset.md)
-13. [AI-Assisted Installation](#ai-assisted-installation)
-14. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
+13. [EvalHub Demo — Level 1 (Optional)](docs/demos/evalhub-demo.md)
+14. [EvalHub Demo — Level 2 (Optional)](docs/demos/evalhub-demo-level2.md)
+15. [AI-Assisted Installation](#ai-assisted-installation)
+16. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
 15. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
 16. [Appendix C — Reference Links](#appendix-c--reference-links)
 17. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
@@ -730,6 +732,18 @@ Wipe all demo state from Sections 10 and 11 and start from a clean slate. See: *
 
 ---
 
+## 13. EvalHub Demo — Level 1 (Optional)
+
+GuideLLM performance comparison (baseline vs llm-d optimized) for `qwen3-8b` on MaaS, with results in MLflow. Requires Phases 0–6 complete on RHOAI 3.5 and a working MaaS endpoint. See the full walkthrough: **[docs/demos/evalhub-demo.md](docs/demos/evalhub-demo.md)**
+
+---
+
+## 14. EvalHub Demo — Level 2 (Optional)
+
+CI/CD quality gate (Garak + lm-eval) and OCI immutable evaluation artifacts (Quay export). Requires Level 1 complete. See the full walkthrough: **[docs/demos/evalhub-demo-level2.md](docs/demos/evalhub-demo-level2.md)**
+
+---
+
 ## AI-Assisted Installation
 
 For guided installation using Claude Code, Cursor, or compatible AI coding assistants,
@@ -746,11 +760,16 @@ with wait conditions and human gates:
 | 5 — llm-d Quick Start | [docs/phases/05-llmd-quickstart.md](docs/phases/05-llmd-quickstart.md) | 15–20 min |
 | 6 — MaaS | [docs/phases/06-maas.md](docs/phases/06-maas.md) | 10–15 min |
 
+**Optional demos** (after Phase 6): [MaaS demo](docs/demos/maas-demo.md) → [EvalHub Level 1](docs/demos/evalhub-demo.md) → [EvalHub Level 2](docs/demos/evalhub-demo-level2.md).
+
 Reference material:
 - [Validation Commands](docs/reference/validation.md)
 - [MaaS Troubleshooting](docs/reference/maas-troubleshooting.md)
 - [ExternalModel Guide](docs/reference/external-models.md)
 - [Migration 3.4 → 3.5](docs/reference/migration-3.4-to-3.5.md)
+- [RHCL version pin](docs/reference/rhcl-version-pin.md)
+- [EvalHub Demo — Level 1](docs/demos/evalhub-demo.md)
+- [EvalHub Demo — Level 2](docs/demos/evalhub-demo-level2.md)
 
 ---
 

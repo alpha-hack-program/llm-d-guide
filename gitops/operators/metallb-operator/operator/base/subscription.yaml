@@ -5,7 +5,7 @@ metadata:
   namespace: metallb-system
 spec:
   channel: patch-me-see-overlays-dir
-  installPlanApproval: Automatic
+  installPlanApproval: Manual
   name: metallb-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
