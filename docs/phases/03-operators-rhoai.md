@@ -36,8 +36,11 @@ connectivity-link operator  →  Kuadrant CR (observability enabled, Ready defer
 > in `gitops/operators/connectivity-link` no longer pins to a specific CSV — it tracks the
 > `stable` channel with no version pin and picks up the latest release automatically.
 
+> **OLMv0 only:** The RHCL bundle declares `olm.package.required` dependencies, which OLMv1
+> does not support. Always install via `oc apply -k` (OLMv0) regardless of OCP version.
+
 ```bash
-# OCP 4.20 (OLMv0):
+# Always OLMv0 (both OCP 4.20 and 4.21+):
 oc apply -k ./gitops/operators/connectivity-link
 # InstallPlan may require manual approval due to dependencies
 oc get installplan -n openshift-operators | grep -i "requiresapproval"
@@ -45,12 +48,19 @@ oc get installplan -n openshift-operators | grep -i "requiresapproval"
 # oc patch installplan <NAME> -n openshift-operators --type merge -p '{"spec":{"approved":true}}'
 oc get csv -n openshift-operators -w | grep -E "rhcl|authorino|limitador"
 
-# OCP 4.21+ (OLMv1):
-oc apply -f gitops/operators/connectivity-link/cluster-extension.yaml
-oc wait --for='jsonpath={.status.conditions[?(@.type=="Installed")].status}=True' \
-  clusterextension/rhcl-operator --timeout=300s
+# Wait for RHCL CSV
+echo "Waiting for RHCL CSV to appear..."
+for i in $(seq 1 60); do
+  CSV=$(oc get csv -n openshift-operators -o name 2>/dev/null | grep rhcl || true)
+  if [[ -n "$CSV" ]]; then
+    echo "Found: $CSV"
+    oc wait --for=jsonpath='{.status.phase}'=Succeeded $CSV -n openshift-operators --timeout=600s
+    break
+  fi
+  sleep 5
+done
 
-# Wait for AuthPolicy CRD (both OLMv0 and OLMv1)
+# Wait for AuthPolicy CRD
 oc wait --for=condition=Established crd/authpolicies.kuadrant.io --timeout=300s
 ```
 
@@ -90,9 +100,17 @@ until oc apply -k ./gitops/operators/leader-worker-set; do
 done
 oc get csv -n openshift-lws-operator -w | grep -E "leader-worker-set"
 
-# Wait for CRDs
+# Wait for operator CRD
 oc wait --for=condition=Established crd/leaderworkersetoperators.operator.openshift.io --timeout=300s
-oc wait --for=condition=Established crd/leaderworkersets.leaderworkerset.x-k8s.io --timeout=300s
+
+# Wait for workload CRD (may take extra time after operator CRD is ready):
+echo "Waiting for leaderworkersets CRD..."
+for i in $(seq 1 60); do
+  if oc wait --for=condition=Established crd/leaderworkersets.leaderworkerset.x-k8s.io --timeout=5s 2>/dev/null; then
+    break
+  fi
+  sleep 5
+done
 ```
 
 ### Step 3 — Monitoring Operators (BEFORE RHOAI)
@@ -141,27 +159,57 @@ oc get packagemanifest rhods-operator -n openshift-marketplace \
 
 RHOAI_OLM_PROFILE="${RHOAI_OLM_PROFILE:-stable}"
 
-# OCP 4.20 (OLMv0):
+# OCP 4.20 and 4.21 (OLMv0):
+# Note: On OCP 4.21, use OLMv0 — the web console does not display OLMv1-installed operators.
+# The chart supports --set olmVersion=v1 for forward compatibility when the console supports OLMv1.
 helm template rhoai-operator ./gitops/operators/rhoai \
   --set olmProfile="${RHOAI_OLM_PROFILE}" | oc apply -f -
-oc get csv -n redhat-ods-operator -w | grep -E "rhods"
 
-# OCP 4.21+ (OLMv1) — add --set olmVersion=v1:
-helm template rhoai-operator ./gitops/operators/rhoai \
-  --set olmProfile="${RHOAI_OLM_PROFILE}" --set olmVersion=v1 | oc apply -f -
-oc wait --for='jsonpath={.status.conditions[?(@.type=="Installed")].status}=True' \
-  clusterextension/rhods-operator --timeout=600s
+# Wait for RHOAI CSV
+echo "Waiting for RHOAI CSV..."
+for i in $(seq 1 120); do
+  CSV=$(oc get csv -n redhat-ods-operator -o name 2>/dev/null | grep rhods || true)
+  if [[ -n "$CSV" ]]; then
+    echo "Found: $CSV"
+    oc wait --for=jsonpath='{.status.phase}'=Succeeded $CSV -n redhat-ods-operator --timeout=600s
+    break
+  fi
+  sleep 5
+done
 ```
 
 ### Step 5 — Configure OpenShift AI (DSCInitialization + DataScienceCluster)
 
+> **Auto-created DSCi conflict:** The RHOAI operator auto-creates a `default-dsci` with
+> `monitoring.namespace: opendatahub`. The chart sets `redhat-ods-monitoring`, and this field
+> is immutable — `oc apply` will be rejected with `MonitoringNamespace is immutable`. Delete
+> the auto-created DSCi (and the DSC, which blocks DSCi deletion) before applying:
+
 ```bash
-oc wait --for=condition=Established crd/dashboards.components.platform.opendatahub.io --timeout=600s
+# Wait for the DSC CRD to be established
+oc wait --for=condition=Established crd/datascienceclusters.datasciencecluster.opendatahub.io --timeout=600s
+
+# Delete the auto-created DSCi (must delete DSC first — webhook blocks DSCi deletion otherwise)
+if oc get datasciencecluster default-dsc &>/dev/null; then
+  oc delete datasciencecluster default-dsc
+fi
+if oc get dscinitializations default-dsci &>/dev/null; then
+  oc delete dscinitializations default-dsci
+fi
 
 # Render and apply (chart emits resources across multiple namespaces).
-# Note: OdhDashboardConfig CRD may not be ready on the first pass. If the apply fails on
-# OdhDashboardConfig, wait for the CRD and re-run:
-#   oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io --timeout=120s
+# Note: OdhDashboardConfig and MLflow CRDs may not be ready on the first pass — this is expected.
+# Wait for the CRDs and re-run:
+helm template rhoai ./gitops/instance/rhoai | oc apply -f - 2>&1 || true
+
+# Wait for remaining CRDs, then re-apply to pick up OdhDashboardConfig and MLflow
+echo "Waiting for OdhDashboardConfig CRD..."
+for i in $(seq 1 60); do
+  if oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io --timeout=5s 2>/dev/null; then
+    break
+  fi
+  sleep 5
+done
 helm template rhoai ./gitops/instance/rhoai | oc apply -f -
 
 # Wait for LLMInferenceService CRD and controller pods
@@ -336,8 +384,10 @@ oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator \
 - **Kuadrant CR `Ready: False` — "istio / envoy gateway not installed"** — the built-in Gateway API controller is sufficient. The Kuadrant operator sometimes fails to detect it on first start. Fix: restart the operator pod (`oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator`) and wait for `Ready: True`. Do NOT search the marketplace or install any gateway operator.
 - **`modelsAsService` must be `false` during Phase 3.** The `maas-api` pod requires both the MaaS gateway AND the `maas-db-config` database secret to exist before it can start. Enabling it before Phase 6 Step 4 (after gateway and database are ready) leaves the DataScienceCluster `Not Ready (modelsasservice)` with no maas-api pod. The default in `values.yaml` is already `false`; do not override it to `true` here. Enable it in Phase 6 Step 4 by re-applying the chart.
 - `helm template rhoai | oc apply` may fail if CRDs aren't established yet. The wait commands above prevent this, but re-run them if you hit `resource mapping not found`.
-- `helm template rhoai | oc apply` may also fail on `OdhDashboardConfig` on the first pass — the CRD is registered only after the Dashboard component initialises. Wait for `oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io` and re-run.
+- `helm template rhoai | oc apply` may also fail on `OdhDashboardConfig` and `MLflow` on the first pass — these CRDs are registered only after the Dashboard and MLflow components initialise. Wait for `oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io` and re-run.
+- **DSCi `MonitoringNamespace is immutable`** — The RHOAI operator auto-creates a `default-dsci` with `monitoring.namespace: opendatahub`. The chart sets `redhat-ods-monitoring`. Since this field is immutable, `oc apply` is rejected. Fix: delete the auto-created DSC and DSCi before applying (Step 5 includes this). The DSC must be deleted first — a webhook blocks DSCi deletion while a DSC exists.
 - **`OdhDashboardConfig` apply fails with `DEPRECATED: spec.dashboardConfig.mlflow must be removed`** — the `mlflow` field in `OdhDashboardConfig` was deprecated and the API server now rejects it. Remove the `mlflow:` line from `gitops/instance/rhoai/templates/odh-dashboard-config.yaml` if it is present. The current template has this removed already.
+- **`OdhDashboardConfig` apply fails with `DEPRECATED: spec.dashboardConfig.maasAuthPolicies must be removed`** — the `maasAuthPolicies` field was deprecated in RHOAI 3.5. Remove it from the template if present. The current template has this removed already.
 - Switching RHOAI channel in-place (patching the Subscription) is unreliable. If you need to change channels, delete the Subscription and CSV first, then re-apply with the new `olmProfile`.
 - Leader Worker Set uses a retry loop (`until oc apply -k ...`) to handle install race conditions — this is expected behaviour, not an error.
 - Do NOT install OpenShift Service Mesh 2.x — its CRDs conflict with the llm-d gateway. Service Mesh 3.x is only for **Llama Stack Operator**; it is not required for base RHOAI or llm-d.

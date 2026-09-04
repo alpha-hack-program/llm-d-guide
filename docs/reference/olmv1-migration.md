@@ -7,9 +7,11 @@
 
 OpenShift Container Platform 4.21 introduces **OLMv1** (Operator Lifecycle Manager v1) as the default operator management system. OLMv0 (the classic `Subscription` + `InstallPlan` + `CSV` flow) remains fully supported through the OCP 4 lifecycle but is deprecated.
 
-This guide supports both:
-- **OCP 4.20** — OLMv0 (`operator.yaml` / Helm with default values)
-- **OCP 4.21+** — OLMv1 (`cluster-extension.yaml` / Helm with `--set olmVersion=v1`)
+> **Important — OCP 4.21 web console limitation:** On OCP 4.21, the web console's **Installed Operators** page only lists OLMv0-installed operators (CSVs). Operators installed via OLMv1 (`ClusterExtension`) are functional but invisible in the console UI. For this reason, **this guide uses OLMv0 for all operators on both OCP 4.20 and 4.21**. OLMv1 install paths (`cluster-extension.yaml`, `--set olmVersion=v1`) are shipped in every operator directory for forward compatibility — use them when a future OCP release adds console support for OLMv1 operators.
+
+This guide ships both install methods:
+- **OCP 4.20 and 4.21** — OLMv0 (`operator.yaml` / Helm without `--set olmVersion=v1`) — **recommended**
+- **Future OCP** — OLMv1 (`cluster-extension.yaml` / Helm with `--set olmVersion=v1`) — for forward compatibility
 
 ## Key Differences
 
@@ -37,7 +39,7 @@ This constraint means that **not all operators in this guide can use OLMv1** on 
 | Operator | OLMv1 compatible | Usable with OLMv1 in this guide | Install method on 4.21+ |
 |---|---|---|---|
 | cert-manager | Yes | Yes | Helm `--set olmVersion=v1` |
-| Connectivity Link (RHCL) | Yes | Yes | `cluster-extension.yaml` |
+| Connectivity Link (RHCL) | **No** — `olm.package.required` deps | **No** | `oc apply -k` (always OLMv0) |
 | Tempo | Yes | **No** — RHOAI detects via CSV only | OLMv0 (`oc apply -k`) |
 | OpenTelemetry | Yes | **No** — RHOAI detects via CSV only | OLMv0 (`oc apply -k`) |
 | RHOAI | Yes | Yes | Helm `--set olmVersion=v1` |
@@ -53,6 +55,8 @@ The `cluster-extension.yaml` files for these three operators are kept in the rep
 Additionally, **Tempo and OpenTelemetry must also use OLMv0** in this guide. While their bundles support AllNamespaces (OLMv1 works technically), RHOAI 3.5's monitoring controller detects these operators by checking for a CSV — it does not recognize OLMv1 ClusterExtensions. Installing Tempo or OpenTelemetry via OLMv1 causes the monitoring stack precondition to fail with `"Tempo operator must be installed for traces configuration"`, preventing TempoMonolithic creation.
 
 Until RHOAI adds OLMv1 operator detection, use OLMv0 for Tempo and OpenTelemetry.
+
+Additionally, **Connectivity Link (RHCL) must also use OLMv0**. The RHCL v1.4.x bundle declares `olm.package.required` dependencies, which OLMv1 does not support. Installing via `ClusterExtension` fails with `"bundle has a dependency declared via property 'olm.package.required' which is currently not supported"`. Always use `oc apply -k gitops/operators/connectivity-link` (OLMv0) regardless of OCP version.
 
 ## ClusterExtension Anatomy
 
@@ -203,7 +207,7 @@ oc wait --for=condition=Installed clusterextension/<name> --timeout=300s
 | Operator | Package Name | OLMv1 on 4.21+ | Namespace |
 |---|---|---|---|
 | cert-manager | `openshift-cert-manager-operator` | Helm (`--set olmVersion=v1`) | `cert-manager-operator` |
-| Connectivity Link | `rhcl-operator` | `cluster-extension.yaml` | `openshift-operators` |
+| Connectivity Link | `rhcl-operator` | OLMv0 only (`olm.package.required` deps) | `openshift-operators` |
 | COO | `cluster-observability-operator` | `cluster-extension.yaml` | `openshift-cluster-observability-operator` |
 | RHOAI | `rhods-operator` | Helm (`--set olmVersion=v1`) | `redhat-ods-operator` |
 | Tempo | `tempo-product` | OLMv0 only (RHOAI CSV check) | `openshift-tempo-operator` |

@@ -8,9 +8,10 @@ Time:     ~5 min
 Steps:
   1. Run ./scripts/preflight-validation.sh
   2. Auto-derive: OCP_MINOR, CLUSTER_DOMAIN, AWS_REGION, INFRA_ID, AMI_ID
-     → OCP_MINOR determines install method:
-       4.20  = OLMv0 (Subscription + operator.yaml)
-       4.21+ = OLMv1 (ClusterExtension + cluster-extension.yaml)
+     → Both 4.20 and 4.21 use OLMv0 (Subscription + operator.yaml)
+       OCP 4.21 web console does not display OLMv1 operators
+       OLMv1 paths (cluster-extension.yaml, --set olmVersion=v1) are
+       provided for forward compatibility
   3. Ask user: CLOUD (aws / none)
   4. Ask user: TLS_ISSUER (letsencrypt / local-ca)
   5. Ask user: AWS_INSTANCE_TYPE (if CLOUD=aws)

@@ -9,10 +9,9 @@ Requires: CLOUD, TLS_ISSUER confirmed
 Steps:
   1. Install cert-manager operator
      OCP 4.20: helm template | oc apply (retry loop for CRD race)
-     OCP 4.21+: helm template --set olmVersion=v1 | oc apply
+     OCP 4.21: use OLMv0 (OLMv1 path available for forward compat)
   2. Wait for operator ready:
-     OCP 4.20: CSV Succeeded + 3 pods Ready
-     OCP 4.21+: ClusterExtension Installed=True + 3 pods Ready
+     OCP 4.20/4.21: CSV Succeeded + 3 pods Ready
   3a. [letsencrypt] Run ./scripts/validate-cluster-domain.sh
       → STOP and confirm domain with user before proceeding
       → Apply cert-manager-route53 chart

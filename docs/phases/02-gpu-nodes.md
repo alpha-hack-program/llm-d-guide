@@ -47,18 +47,33 @@ Do NOT decide this yourself — the number of GPU nodes affects cost and schedul
    # Install NFD operator (always OLMv0)
    bash gitops/operators/nfd/install.sh
 
-   # Wait for NFD CSV to reach Succeeded:
-   oc get csv -n openshift-nfd -w | grep nfd
-   oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
-     -n openshift-nfd -l operators.coreos.com/nfd.openshift-nfd= --timeout=300s
+   # Wait for NFD CSV to reach Succeeded (poll by name — label selector is not
+   # applied immediately and causes "no matching resources" on fresh installs):
+   echo "Waiting for NFD CSV..."
+   for i in $(seq 1 60); do
+     CSV=$(oc get csv -n openshift-nfd -o name 2>/dev/null | grep nfd || true)
+     if [[ -n "$CSV" ]]; then
+       echo "Found: $CSV"
+       oc wait --for=jsonpath='{.status.phase}'=Succeeded $CSV -n openshift-nfd --timeout=300s
+       break
+     fi
+     sleep 5
+   done
 
    # Install NVIDIA GPU operator (always OLMv0)
    bash gitops/operators/nvidia/install.sh
 
    # Wait for NVIDIA GPU operator CSV to reach Succeeded:
-   oc get csv -n nvidia-gpu-operator -w | grep gpu-operator
-   oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
-     -n nvidia-gpu-operator -l operators.coreos.com/gpu-operator-certified.nvidia-gpu-operator= --timeout=300s
+   echo "Waiting for NVIDIA GPU operator CSV..."
+   for i in $(seq 1 60); do
+     CSV=$(oc get csv -n nvidia-gpu-operator -o name 2>/dev/null | grep gpu-operator || true)
+     if [[ -n "$CSV" ]]; then
+       echo "Found: $CSV"
+       oc wait --for=jsonpath='{.status.phase}'=Succeeded $CSV -n nvidia-gpu-operator --timeout=300s
+       break
+     fi
+     sleep 5
+   done
    ```
 
 3. Apply the instance CRs (after both operator CSVs reach `Succeeded`):

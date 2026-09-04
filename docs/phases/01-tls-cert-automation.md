@@ -31,7 +31,10 @@ CLOUD=aws   # or "none" for bare metal / non-AWS
 
 Install the operator (retry loop handles the two-pass CRD race):
 
-**OCP 4.20 (OLMv0):**
+**OCP 4.20 and 4.21 (OLMv0):**
+
+> **Note:** On OCP 4.21, use OLMv0 — the web console does not display OLMv1-installed operators.
+> The chart supports `--set olmVersion=v1` for forward compatibility when the console supports OLMv1.
 
 ```bash
 for i in $(seq 1 60); do
@@ -44,44 +47,28 @@ for i in $(seq 1 60); do
 done
 
 # Wait for CSV
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
-  -n cert-manager-operator \
-  -l operators.coreos.com/openshift-cert-manager-operator.cert-manager-operator= \
-  --timeout=300s
-```
-
-**OCP 4.21+ (OLMv1) — add `--set olmVersion=v1`:**
-
-```bash
+echo "Waiting for cert-manager CSV..."
 for i in $(seq 1 60); do
-  if helm template gitops/operators/cert-manager-operator \
-       --set cloud=${CLOUD} --set olmVersion=v1 --name-template cert-manager | oc apply -f -; then
+  CSV=$(oc get csv -n cert-manager-operator -o name 2>/dev/null | grep cert-manager || true)
+  if [[ -n "$CSV" ]]; then
+    echo "Found: $CSV"
+    oc wait --for=jsonpath='{.status.phase}'=Succeeded $CSV -n cert-manager-operator --timeout=300s
     break
   fi
-  [[ $i -eq 60 ]] && { echo "Gave up after 60 attempts"; exit 1; }
   sleep 5
 done
-
-# Wait for ClusterExtension (replaces CSV on OLMv1)
-oc wait --for=jsonpath='{.status.conditions[?(@.type=="Installed")].status}'=True clusterextension \
-  openshift-cert-manager-operator \
-  --timeout=300s
 ```
 
-> **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV (OLMv0) or ClusterExtension (OLMv1) reports success. This is expected. Wait for the operator to be ready, then run the same command a second time — it applies cleanly:
+> **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reports success. This is expected. Wait for the operator to be ready, then run the same command a second time — it applies cleanly:
 > ```bash
-> # OCP 4.20 — wait for CSV:
+> # Wait for CSV:
+> # (use the polling loop above, or:)
 > oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
 >   -n cert-manager-operator \
 >   -l operators.coreos.com/openshift-cert-manager-operator.cert-manager-operator= \
 >   --timeout=300s
 >
-> # OCP 4.21+ — wait for ClusterExtension:
-> oc wait --for=jsonpath='{.status.conditions[?(@.type=="Installed")].status}'=True clusterextension \
->   openshift-cert-manager-operator \
->   --timeout=300s
->
-> # Second pass — applies the CertManager CR (add --set olmVersion=v1 on OCP 4.21+)
+> # Second pass — applies the CertManager CR
 > helm template gitops/operators/cert-manager-operator \
 >   --set cloud=${CLOUD} --name-template cert-manager | oc apply -f -
 > ```

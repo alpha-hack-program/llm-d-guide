@@ -35,7 +35,10 @@ oc get pods -n openshift-user-workload-monitoring -w
 
 **Note:** In RHOAI 3.4.1 the operator was pinned to COO v1.4.0 because the Perses image did not support newer CLI flags. This pin is removed for RHOAI 3.5 — the updated Perses image supports current COO versions. Install the latest available version from the channel.
 
-**OCP 4.20 (OLMv0):**
+**OCP 4.20 and 4.21 (OLMv0):**
+
+> **Note:** On OCP 4.21, use OLMv0 — the web console does not display OLMv1-installed operators.
+> The `cluster-extension.yaml` is provided for forward compatibility when the console supports OLMv1.
 
 ```bash
 oc apply -k gitops/operators/cluster-observability-operator
@@ -46,28 +49,21 @@ IP=$(oc get installplan -n openshift-cluster-observability-operator \
 [[ -n "$IP" ]] && oc patch installplan "$IP" -n openshift-cluster-observability-operator \
   --type=merge -p '{"spec":{"approved":true}}'
 
-# Wait for COO CSV
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
-  -n openshift-cluster-observability-operator \
-  -l operators.coreos.com/cluster-observability-operator.openshift-cluster-observability-operator= \
-  --timeout=300s
+# Wait for COO CSV (poll by name — label may not be applied immediately)
+echo "Waiting for COO CSV..."
+for i in $(seq 1 60); do
+  CSV=$(oc get csv -n openshift-cluster-observability-operator -o name 2>/dev/null | grep cluster-observability || true)
+  if [[ -n "$CSV" ]]; then
+    echo "Found: $CSV"
+    oc wait --for=jsonpath='{.status.phase}'=Succeeded $CSV -n openshift-cluster-observability-operator --timeout=300s
+    break
+  fi
+  sleep 5
+done
 
 # Verify COO is installed
 oc get csv -n openshift-cluster-observability-operator | grep cluster-observability
 # Expected: cluster-observability-operator.v<version>   Succeeded
-```
-
-**OCP 4.21+ (OLMv1):**
-
-```bash
-oc apply -f gitops/operators/cluster-observability-operator/cluster-extension.yaml
-
-# Wait for ClusterExtension to report Installed
-oc wait --for=condition=Installed clusterextension/cluster-observability-operator --timeout=300s
-
-# Verify COO is installed
-oc get clusterextension cluster-observability-operator
-# Expected: cluster-observability-operator   Installed
 ```
 
 ### Step 3 — Enable Perses dashboards in the OpenShift console

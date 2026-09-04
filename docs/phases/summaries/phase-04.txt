@@ -15,8 +15,8 @@ Steps:
   1. Enable User Workload Monitoring (cluster-monitoring-config)
   2. Wait for prometheus-user-workload pods
   3. Install Cluster Observability Operator (COO)
-     OCP 4.20: oc apply -k (OLMv0)
-     OCP 4.21+: oc apply -f cluster-extension.yaml (OLMv1)
+     OCP 4.20/4.21: oc apply -k (OLMv0)
+     OLMv1 path available for forward compatibility
   4. Wait for COO operator ready
   5. Create UIPlugin CRs:
      - type: Dashboards
@@ -27,7 +27,7 @@ Steps:
      → label: app.kubernetes.io/part-of: monitoring
 
 Human gate:
-  - COO operator ready (CSV Succeeded or ClusterExtension Installed)
+  - COO operator ready (CSV Succeeded)
   - prometheus-user-workload pods Running
   - Optional: verify Perses tab in console
 

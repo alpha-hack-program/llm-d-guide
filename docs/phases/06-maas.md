@@ -19,10 +19,11 @@ oc get pods -n kuadrant-system
 
 # LLMInferenceService(s) Ready
 oc get llminferenceservice -A
-
-# maas-api pod running
-oc get pods -n redhat-ai-gateway-infra -l app.kubernetes.io/name=maas-api
 ```
+
+> **Note:** Do not check for `maas-api` in pre-flight — it does not exist until Step 3
+> (`modelsAsService=true` is enabled). The namespace `redhat-ai-gateway-infra` may also not
+> exist yet.
 
 **Steps (follow README §9.2):**
 
@@ -60,8 +61,19 @@ oc get secret maas-db-config -n redhat-ai-gateway-infra
 Re-apply the RHOAI instance chart with `modelsAsService=true` **after** the gateway (Step 1) and database (Step 2) are ready. This creates the `maas-controller` and `maas-api` pods:
 ```bash
 helm template rhoai ./gitops/instance/rhoai --set modelsAsService=true | oc apply -f -
-oc wait --for=condition=ready pod -l app.kubernetes.io/name=maas-api \
-  -n redhat-ai-gateway-infra --timeout=120s
+
+# The maas-api pod takes time to appear after DSC reconciliation — poll for it:
+echo "Waiting for maas-api pod to appear..."
+for i in $(seq 1 60); do
+  POD=$(oc get pods -n redhat-ai-gateway-infra -l app.kubernetes.io/name=maas-api --no-headers 2>/dev/null | head -1)
+  if [[ -n "$POD" ]]; then
+    echo "Found maas-api pod"
+    oc wait --for=condition=ready pod -l app.kubernetes.io/name=maas-api \
+      -n redhat-ai-gateway-infra --timeout=120s
+    break
+  fi
+  sleep 5
+done
 ```
 
 ### Step 4 — Authorino TLS
@@ -123,19 +135,35 @@ oc annotate gateway maas-default-gateway -n openshift-ingress \
   security.opendatahub.io/authorino-tls-bootstrap="true" \
   --overwrite
 
-# Verify TLS EnvoyFilter was created (may take a few seconds)
-sleep 10
+# Wait for EnvoyFilter — if it doesn't appear within 30s, restart odh-model-controller.
+# The controller does a one-shot check and may have reconciled before TLS was fully active.
+echo "Waiting for EnvoyFilter..."
+FOUND=false
+for i in $(seq 1 6); do
+  if oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress &>/dev/null; then
+    FOUND=true
+    echo "EnvoyFilter created"
+    break
+  fi
+  sleep 5
+done
+
+if [[ "$FOUND" != "true" ]]; then
+  echo "EnvoyFilter not found — restarting odh-model-controller to re-trigger reconciliation..."
+  oc rollout restart deployment/odh-model-controller -n redhat-ods-applications
+  oc rollout status deployment/odh-model-controller -n redhat-ods-applications --timeout=120s
+  # Poll again after restart
+  for i in $(seq 1 12); do
+    if oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress &>/dev/null; then
+      echo "EnvoyFilter created after restart"
+      break
+    fi
+    sleep 5
+  done
+fi
+
 oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress
 ```
-
-> **Fallback — if the EnvoyFilter does not appear:** The `odh-model-controller` reconciled before
-> TLS was fully active and will not retry on its own. Restart it to force re-reconciliation:
-> ```bash
-> oc rollout restart deployment/odh-model-controller -n redhat-ods-applications
-> oc rollout status deployment/odh-model-controller -n redhat-ods-applications --timeout=120s
-> # Verify EnvoyFilter is now created
-> oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress
-> ```
 
 **Verify Authorino TLS is fully configured:**
 ```bash
@@ -305,23 +333,38 @@ oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications
 
 ### Step 8 — Smoke test
 
-Create an API key and call a model:
+Create an API key and call the model using both routing methods:
 ```bash
 TOKEN=$(oc whoami -t)
 MAAS_GW="maas.${CLUSTER_DOMAIN}"
+
+# 1. Create an API key (expected: HTTP 201 with sk-oai-* key)
 curl -sk -X POST "https://${MAAS_GW}/v1/api-keys" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"name":"test-key","expiresInDays":1}'
+
+# Save the key from the response
+API_KEY="<paste sk-oai-... key here>"
+
+# 2. Path-based routing (primary method — always works)
+#    URL pattern: /<namespace>/<model>/v1/chat/completions
+curl -sk "https://${MAAS_GW}/<namespace>/<model>/v1/chat/completions" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<model>","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
+
+# 3. Body-based routing (RHOAI 3.5 — OpenAI-compatible)
+#    URL: /v1/chat/completions (no path prefix)
+#    The gateway parses the "model" field from the JSON body, injects an
+#    X-Gateway-Model-Name header, and the HTTPRoute matches on that header.
+curl -sk "https://${MAAS_GW}/v1/chat/completions" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"<model>","messages":[{"role":"user","content":"Hello"}],"max_tokens":50}'
 ```
 
-**Human gate:** API key creation returns HTTP 201 with a `sk-oai-*` key. Model call with that key returns HTTP 200.
-
-> **RHOAI 3.5 — body-based model routing:** RHOAI 3.5 supports OpenAI-compatible body-based model
-> routing. Requests to `/v1/chat/completions` with the model name in the JSON request body
-> (the standard `"model": "<model-name>"` field) are now routed correctly without needing a
-> model-specific path prefix. This means standard OpenAI client libraries work out of the box
-> against the MaaS gateway endpoint.
+**Human gate:** API key creation returns HTTP 201 with a `sk-oai-*` key. Both model calls return HTTP 200. If body-based routing (step 3) returns 404, the gateway's body-parsing feature may not be active — path-based routing (step 2) is the primary and most reliable method.
 
 ---
 

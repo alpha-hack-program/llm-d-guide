@@ -7,15 +7,13 @@ Goal:     Install Connectivity Link, LeaderWorkerSet, monitoring
           Configure DataScienceCluster.
 Time:     ~20-30 min
 
-Install method by operator:
-  OLMv1 (cluster-extension.yaml on 4.21+, operator.yaml on 4.20):
-    Connectivity Link
-  OLMv0 only (always use operator.yaml / oc apply -k):
-    LeaderWorkerSet (bundle doesn't support AllNamespaces)
-    Tempo (RHOAI detects via CSV only)
-    OpenTelemetry (RHOAI detects via CSV only)
-  Helm (--set olmVersion=v1 on 4.21+):
+Install method (all operators use OLMv0 on 4.20 and 4.21):
+  oc apply -k:
+    Connectivity Link, LeaderWorkerSet, Tempo, OpenTelemetry
+  Helm (OLMv0 — omit --set olmVersion=v1):
     RHOAI
+  Note: OLMv1 paths are provided for forward compatibility
+        when the OCP console supports OLMv1 operators
 
   1. Connectivity Link → wait for operator ready
      → Create Kuadrant CR (Authorino + Limitador)
