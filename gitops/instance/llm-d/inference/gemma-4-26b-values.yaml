@@ -1,0 +1,66 @@
+deploymentType: intelligent-inference
+serviceName: gemma-4-26b
+replicas: 1
+
+model:
+  name: redhat/gemma-4-26b-fp8
+
+storage:
+  type: oci
+  uri: oci://registry.redhat.io/rhai/modelcar-redhatai-gemma-4-26b-a4b-it-fp8-dynamic:3.0
+
+resources:
+  limits:
+    cpu: "8"
+    memory: 28Gi
+    gpuCount: "1"
+  requests:
+    cpu: "6"
+    memory: 24Gi
+    gpuCount: "1"
+
+hardwareProfile:
+  namespace: redhat-ods-applications
+  name: nvidia
+
+vllm:
+  prefixCaching:
+    enabled: auto
+  extraArgs:
+    - "--disable-access-log-for-endpoints=/health,/metrics,/ping"
+    - "--max-model-len=42000"
+    - "--enable-auto-tool-choice"
+    - "--tool-call-parser=gemma4"
+    - "--gpu-memory-utilization=0.90"
+    - "--limit-mm-per-prompt={\"image\": 0, \"audio\": 0}"
+
+# Proxy settings for air-gapped / proxied clusters
+env:
+  - name: HTTP_PROXY
+    value: "http://proxy.chap.junta-andalucia.es:3128"
+  - name: HTTPS_PROXY
+    value: "http://proxy.chap.junta-andalucia.es:3128"
+  - name: NO_PROXY
+    value: ".ialab.junta-andalucia.es,10.0.0.0/8,172.0.0.0/8,10.244.60.200,10.244.60.202,10.47.7.0/24,172.34.0.0/16,172.35.0.0/16,localhost,127.0.0.1,10.47.7.12,10.47.7.13,10.47.7.14,10.47.7.15,10.47.7.16,10.47.7.17,10.47.7.20,10.47.7.21,s00-nr-ada.tic.junta-andalucia.es"
+  - name: HF_HUB_OFFLINE
+    value: "1"
+  - name: TRANSFORMERS_OFFLINE
+    value: "1"
+  - name: HF_DATASETS_OFFLINE
+    value: "1"
+  - name: HF_HOME
+    value: "/tmp/hf_home"
+  - name: VLLM_CACHE_ROOT
+    value: "/tmp/vllm"
+  - name: OTEL_LOGS_EXPORTER
+    value: "none"
+  - name: OTEL_TRACES_EXPORTER
+    value: "none"
+  - name: OTEL_METRICS_EXPORTER
+    value: "none"
+
+maas:
+  enabled: true
+  gateway:
+    name: maas-default-gateway
+    namespace: openshift-ingress
