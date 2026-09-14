@@ -13,10 +13,13 @@ spec:
     weight: 100
   port:
     targetPort: {{ if .Values.tls.secretName }}https{{ else }}http{{ end }}
-  {{- if .Values.tls.secretName }}
   tls:
+    {{- if .Values.tls.secretName }}
     termination: {{ .Values.route.tlsTermination }}
     insecureEdgeTerminationPolicy: Redirect
-  {{- end }}
+    {{- else }}
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+    {{- end }}
   wildcardPolicy: None
 {{- end }}
