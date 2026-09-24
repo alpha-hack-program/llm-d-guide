@@ -6,6 +6,10 @@ These notes document breaking changes, required actions, and gotchas discovered 
 
 ## Breaking changes
 
+### TrustyAI now required for Gen AI Studio playground (RHOAI 3.5.1+)
+
+Starting in RHOAI 3.5.1, `gen-ai-ui` requires the `nemoguardrails.trustyai.opendatahub.io` CRD to exist. If TrustyAI is `Removed` in the DSC, the playground returns HTTP 500 on every chat request. Set `trustyai.managementState: Managed` in the DSC — the CRD is sufficient, no guardrails need to be configured. See [MaaS Troubleshooting](maas-troubleshooting.md#gen-ai-studio-playground-500--missing-trustyai--nemoguardrails-crds-rhoai-351) for details.
+
 ### DSC v2 API — MaaS field migration
 
 The MaaS toggle moved from `kserve.modelsAsService` to `aigateway.modelsAsAService`. The old field is deprecated but respected through RHOAI 3.6.
@@ -34,6 +38,52 @@ aigateway:
 | — | `mcplifecycleoperator` | New (default: Removed) |
 | — | `aigateway` | New — hosts `modelsAsAService` |
 | — | `mlflowoperator` | New — MLflow operator + instance CR |
+
+### ExternalModel API group and spec redesign
+
+`ExternalModel` and `ExternalProvider` moved from `maas.opendatahub.io/v1alpha1` to `inference.opendatahub.io/v1alpha1`. The spec was restructured into a two-resource pattern:
+
+```yaml
+# 3.4 (single resource — auto-migrated, non-functional in 3.5)
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: ExternalModel
+spec:
+  credentialRef:
+    name: my-credentials
+  endpoint: api.example.com
+  provider: openai
+  targetModel: my-model
+
+# 3.5 (two resources)
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalProvider
+spec:
+  provider: openai
+  endpoint: api.example.com
+  auth:
+    type: apikey
+    secretRef:
+      name: my-credentials
+---
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalModel
+spec:
+  externalProviderRefs:
+  - ref:
+      name: my-provider
+    targetModel: my-model
+    apiFormat: openai-chat
+    path: /v1/chat/completions
+    weight: 100
+```
+
+Old `maas.opendatahub.io` ExternalModels are auto-migrated by the `ipp-legacy-migration` controller — they show `status.phase: Migrated`. The migrated resources have ownerReferences back to the old CR, so deleting the old one cascade-deletes the auto-migrated resources.
+
+**Credential secret changes:**
+- Label: `inference.networking.k8s.io/bbr-managed` → `inference.llm-d.ai/ipp-managed`
+- Data field: the gateway reads `api-key` (not `OPENAI_API_KEY`)
+
+**Action:** Delete old ExternalModels, update secret labels/fields, recreate with `inference.opendatahub.io/v1alpha1`. See [ExternalModel Guide](external-models.md) for the full migration procedure.
 
 ### EPP API group rename
 
@@ -164,9 +214,10 @@ Both `v1alpha1` (served) and `v1alpha2` (served + storage) are available on the 
 ## Upgrade checklist
 
 1. [ ] Update RHOAI operator to 3.5 (stable channel auto-upgrades)
-2. [ ] Re-apply RHOAI instance chart (DSC v2 with `aigateway.modelsAsAService`)
+2. [ ] Re-apply RHOAI instance chart (DSC v2 with `aigateway.modelsAsAService`, `trustyai: Managed`)
 3. [ ] Re-apply MaaS gateway chart (adds `redhat-ai-gateway-infra` to allowedRoutes)
 4. [ ] Update per-model values files (`--disable-uvicorn-access-log` → `--disable-access-log-for-endpoints=...`)
 5. [ ] Re-deploy LLMInferenceServices (picks up new EPP scorers and API group)
-6. [ ] Verify `check-operators.sh` passes
-7. [ ] Clean up stale resources in `redhat-ods-applications` if MaaS was previously deployed there
+6. [ ] Migrate ExternalModels: delete old `maas.opendatahub.io` CRs, update secret labels/fields, recreate with `inference.opendatahub.io`
+7. [ ] Verify `check-operators.sh` passes
+8. [ ] Clean up stale resources in `redhat-ods-applications` if MaaS was previously deployed there

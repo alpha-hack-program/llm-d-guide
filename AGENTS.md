@@ -99,9 +99,9 @@ Add GPU worker nodes and install hardware detection and driver stack.
 **Full guide:** [docs/phases/02-gpu-nodes.md](docs/phases/02-gpu-nodes.md)
 
 ### Phase 3 — Core Operators + RHOAI
-Install Connectivity Link (RHCL 1.3.5+), LeaderWorkerSet, **monitoring operators (Tempo, OpenTelemetry)**, and RHOAI, then configure the DataScienceCluster.
+Install Connectivity Link (RHCL 1.3.5+), LeaderWorkerSet, **monitoring operators (Tempo, OpenTelemetry)**, RHOAI, and TrustyAI, then configure the DataScienceCluster.
 **Critical:** 
-- **Operator install order matters:** Connectivity Link → LeaderWorkerSet → **Tempo + OpenTelemetry (BEFORE RHOAI)** → RHOAI Operator → RHOAI Instance. The monitoring operators must be installed BEFORE RHOAI because the DSCInitialization requires them for monitoring stack initialization.
+- **Operator install order matters:** Connectivity Link → LeaderWorkerSet → **Tempo + OpenTelemetry (BEFORE RHOAI)** → RHOAI Operator → RHOAI Instance → **TrustyAI (set Managed in DSC)**. The monitoring operators must be installed BEFORE RHOAI because the DSCInitialization requires them for monitoring stack initialization. TrustyAI must be enabled after the DSC is created — the `gen-ai-ui` (RHOAI 3.5.1+) requires the NemoGuardrails CRD to exist or the Gen AI Studio playground returns 500.
 - **All operators use OLMv0** on both OCP 4.20 and 4.21 — the OCP 4.21 web console does not display OLMv1 ClusterExtension operators. Use `oc apply -k` for plain-YAML operators, `helm template ... | oc apply -f -` (without `--set olmVersion=v1`) for Helm charts. Wait for `CSV Succeeded` for all operators. OLMv1 paths (`cluster-extension.yaml`, `--set olmVersion=v1`) are provided for forward compatibility. Note: even when OLMv1 console support arrives, several operators have additional blockers — Connectivity Link / RHCL (`olm.package.required` deps), LeaderWorkerSet/NFD/NVIDIA (OwnNamespace only), Tempo/OpenTelemetry (RHOAI CSV detection).
 - Enable Kuadrant observability (`spec.observability.enable: true`) when creating the Kuadrant CR — required for the monitoring stack in Phase 4.
 - Do NOT install Kueue unless explicitly required. 
@@ -150,8 +150,8 @@ Deploy the MaaS gateway, configure Authorino TLS, bootstrap the subscription sta
 - [OLMv1 Migration](docs/reference/olmv1-migration.md) — ClusterExtension CRD, RBAC, catalog mapping, wait conditions (load when `OCP_MINOR >= 21`)
 - [Validation Commands](docs/reference/validation.md) — `oc get` checks for operators, CRDs, gateways, MaaS
 - [MaaS Troubleshooting](docs/reference/maas-troubleshooting.md) — Key facts, gotchas, token rate limiting, dashboard flags
-- [ExternalModel Guide](docs/reference/external-models.md) — Credential injection, MaaSModelRef naming, monitoring
-- [Migration 3.4 → 3.5](docs/reference/migration-3.4-to-3.5.md) — Breaking changes, MaaS namespace move, vLLM flag deprecation, upgrade checklist
+- [ExternalModel Guide](docs/reference/external-models.md) — Two-resource pattern (ExternalProvider + ExternalModel), `inference.opendatahub.io/v1alpha1` API, credential injection, migration from 3.4
+- [Migration 3.4 → 3.5](docs/reference/migration-3.4-to-3.5.md) — Breaking changes, MaaS namespace move, ExternalModel API migration, vLLM flag deprecation, upgrade checklist
 
 ---
 

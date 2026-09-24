@@ -314,7 +314,8 @@ EOF
 > **Multiple models:** To register both models, list all modelRefs in a single MaaSSubscription and MaaSAuthPolicy — each with its own `tokenRateLimits` entry.
 
 **Critical schema notes:**
-- `MaaSSubscription`, `MaaSAuthPolicy`, `Tenant`, `ExternalModel`, and `MaaSModelRef` all use `apiVersion: maas.opendatahub.io/v1alpha1`
+- `MaaSSubscription`, `MaaSAuthPolicy`, `Tenant`, and `MaaSModelRef` use `apiVersion: maas.opendatahub.io/v1alpha1`
+- `ExternalModel` and `ExternalProvider` use `apiVersion: inference.opendatahub.io/v1alpha1` (moved from `maas.opendatahub.io` in 3.5 — see [ExternalModel Guide](../reference/external-models.md))
 - `owner.groups` is a **list of objects** with `kind: Group` + `name`, NOT a list of strings
 - `tokenRateLimits` is **required on each modelRef**, with `window` and `limit` fields
 - `window` units: `s`, `m`, `h` only — `d` is not supported, use `24h`
