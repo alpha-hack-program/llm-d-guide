@@ -48,6 +48,10 @@ User extraArgs are appended after framework-managed flags.
 {{- if $shouldEnablePrefixCaching -}}
 {{- $args = append $args "--enable-prefix-caching" -}}
 {{- end -}}
+{{- /* Auto-inject --served-model-name when serviceName differs from model.name */ -}}
+{{- if ne .Values.serviceName .Values.model.name -}}
+{{- $args = append $args (printf "--served-model-name=%s" .Values.serviceName) -}}
+{{- end -}}
 {{- /* Append user extra args */ -}}
 {{- if and .Values.vllm .Values.vllm.extraArgs -}}
 {{- range .Values.vllm.extraArgs -}}

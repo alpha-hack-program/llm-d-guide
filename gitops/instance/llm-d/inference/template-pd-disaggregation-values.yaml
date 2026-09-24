@@ -1,0 +1,74 @@
+# ── Template: Prefill-Decode Disaggregation ─────────────────────────────────
+# Copy this file and replace the <PLACEHOLDERS> for your model.
+#
+# Deploy (Phase 5, no MaaS):
+#   helm template <SERVICE_NAME> ./gitops/instance/llm-d/inference \
+#     -f <this-file> -n <NAMESPACE> | oc apply -f -
+#
+# Deploy (Phase 6, with MaaS — flip maas.enabled to true):
+#   helm template <SERVICE_NAME> ./gitops/instance/llm-d/inference \
+#     -f <this-file> --set maas.enabled=true -n <NAMESPACE> | oc apply -f -
+#
+# The gateway ref is always present so re-applying never drops the MaaS route.
+# Only maas.enabled controls whether auth and MaaSModelRef are created.
+
+deploymentType: pd-disaggregation
+
+# ── REQUIRED: replace these ──────────────────────────────────────────────────
+serviceName: <SERVICE_NAME>          # e.g. qwen3-8b-pd — used as LLMInferenceService name and MaaS route
+model:
+  name: <HF_MODEL_NAME>             # e.g. alibaba/qwen3-8b — HuggingFace model identifier
+storage:
+  type: oci                          # oci or hf
+  uri: <MODELCAR_OCI_URI>           # e.g. oci://registry.redhat.io/rhelai1/modelcar-qwen3-8b-fp8-dynamic:1.5
+
+# ── Sizing (decode pool) ────────────────────────────────────────────────────
+replicas: 1
+resources:
+  limits:
+    cpu: "6"
+    memory: 24Gi
+    gpuCount: "1"
+  requests:
+    cpu: "6"
+    memory: 24Gi
+    gpuCount: "1"
+
+# ── Sizing (prefill pool) ───────────────────────────────────────────────────
+prefill:
+  replicas: 1
+  resources:
+    limits:
+      cpu: "6"
+      memory: 24Gi
+      gpuCount: "1"
+    requests:
+      cpu: "6"
+      memory: 24Gi
+      gpuCount: "1"
+
+hardwareProfile:
+  namespace: redhat-ods-applications
+  name: gpu-profile
+
+# ── KV transfer (NixlConnector) ─────────────────────────────────────────────
+kvTransfer:
+  blockSize: 128
+  abortRequestTimeout: "100000"
+  loggingLevel: "DEBUG"
+
+# ── vLLM ─────────────────────────────────────────────────────────────────────
+# Note: PD disaggregation manages VLLM_ADDITIONAL_ARGS directly (includes
+# --kv-transfer-config). Use env: [] for extra env vars, not vllm.extraArgs.
+vllm:
+  prefixCaching:
+    enabled: auto
+
+# ── MaaS ─────────────────────────────────────────────────────────────────────
+# Gateway config is pre-filled so you only need --set maas.enabled=true to enable MaaS.
+# The gateway ref is only added to the LLMInferenceService when maas.enabled is true.
+maas:
+  enabled: false
+  gateway:
+    name: maas-default-gateway
+    namespace: openshift-ingress

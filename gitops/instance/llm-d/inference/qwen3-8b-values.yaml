@@ -35,8 +35,10 @@ vllm:
     - "--enable-auto-tool-choice"
     - "--tool-call-parser=hermes"
 
-# Enable maas: true only after completing Phase 6 (MaaS gateway + Kuadrant policies).
-# Setting it true here before the MaaS stack is in place causes maas-controller reconcile
-# errors and does not enable MaaS — it must be toggled after the gateway is ready.
+# Gateway config is pre-filled so you only need --set maas.enabled=true to enable MaaS.
+# The gateway ref is only added to the LLMInferenceService when maas.enabled is true.
 maas:
   enabled: false
+  gateway:
+    name: maas-default-gateway
+    namespace: openshift-ingress
