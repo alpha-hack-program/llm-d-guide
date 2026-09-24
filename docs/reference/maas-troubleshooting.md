@@ -326,6 +326,58 @@ The exception is `MaaSSubscription` with a missing `phase`: API keys created whi
 subscription was in this state return 403 or the `"unreconciled phase"` error. Revoke and
 recreate the key after the controller restart fixes the status.
 
+## Gen AI Studio playground 500 — missing TrustyAI / NemoGuardrails CRDs (RHOAI 3.5.1+)
+
+**Affected version:** RHOAI 3.5.1+
+
+**Symptom:** Sending a message in the Gen AI Studio playground returns HTTP 500. The
+llama-stack backend shows no incoming request — the error originates in the `gen-ai-ui` pod.
+Browser DevTools shows the failing request as `POST /gen-ai/api/v1/lsd/responses`.
+
+**Root cause:** Starting in RHOAI 3.5.1, the `gen-ai-ui` backend attempts to discover
+`NemoGuardrails` CRs (API group `trustyai.opendatahub.io/v1alpha1`) on every `/responses`
+request. If TrustyAI is `Removed` in the DataScienceCluster, the CRD does not exist and API
+discovery fails with:
+
+```
+failed to discover NemoGuardrails service: failed to list NemoGuardrails CRs:
+unable to retrieve the complete list of server APIs: trustyai.opendatahub.io/v1alpha1:
+no matches for trustyai.opendatahub.io/v1alpha1
+```
+
+The `gen-ai-ui` treats this as a hard error and returns 500 — it does not gracefully handle a
+missing TrustyAI API group.
+
+**Diagnosis:**
+
+```bash
+# Check gen-ai-ui logs for the NemoGuardrails discovery failure
+oc logs -n redhat-ods-applications -l deployment=gen-ai-ui --tail=50 \
+  | grep -i "NemoGuardrails\|trustyai"
+
+# Confirm TrustyAI is not installed
+oc get datasciencecluster default-dsc \
+  -o jsonpath='{.spec.components.trustyai.managementState}'
+# If "Removed" → this is the cause
+```
+
+**Fix:** Enable TrustyAI in the DataScienceCluster so the NemoGuardrails CRDs are installed:
+
+```bash
+oc patch datasciencecluster default-dsc --type merge \
+  -p '{"spec":{"components":{"trustyai":{"managementState":"Managed"}}}}'
+
+# Wait for the operator
+oc rollout status deployment/trustyai-service-operator-controller-manager \
+  -n redhat-ods-applications --timeout=120s
+
+# Restart gen-ai-ui to pick up the new API
+oc delete pod -n redhat-ods-applications -l deployment=gen-ai-ui
+```
+
+The NemoGuardrails CRD will exist (with zero instances), the discovery succeeds, and
+`/responses` requests work normally.
+
 ## MaaSAuthPolicy status loop — harmless
 
 The maas-controller may log `"failed to update MaaSAuthPolicy status"` in a tight loop. This is a

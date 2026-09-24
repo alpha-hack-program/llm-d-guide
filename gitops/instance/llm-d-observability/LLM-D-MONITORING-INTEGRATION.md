@@ -499,6 +499,25 @@ oc get csv -n openshift-observability-operator | grep cluster-observability-oper
 
 ---
 
+### Problem: "Unable to reach observability dashboards" after UIPlugin creation
+
+**Symptom:** OpenShift console shows `Unable to reach observability dashboards — Unexpected token '<', "<!doctype "... is not valid JSON` when navigating to **Observe → Dashboards**.
+
+**Cause:** The console pods restarted at the same time the UIPlugin CRs were created — the browser retains a stale session cookie that pre-dates the plugin registration. The console proxy returns an HTML error/login page instead of JSON, which the plugin frontend cannot parse.
+
+**Fix:** Log out of the OpenShift console and log back in to clear the stale session cookie. A hard refresh (`Cmd+Shift+R` / `Ctrl+Shift+R`) alone is not sufficient — the cookie must be reset via a full re-authentication.
+
+**If the issue persists after re-login:**
+```bash
+# Bounce the console pods to force a clean plugin registration
+oc delete pods -n openshift-console -l app=console
+oc rollout status deployment/console -n openshift-console --timeout=120s
+```
+
+Then log out and log back in again.
+
+---
+
 ### Problem: Metrics Missing well_lit_path Label
 
 **Symptom:** `{well_lit_path="..."}` not present in Prometheus queries

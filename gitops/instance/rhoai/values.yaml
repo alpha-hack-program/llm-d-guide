@@ -20,7 +20,7 @@ kueue: false                 # Kueue operator
 ogx: true                    # OGX operator (replaces LlamaStack in RHOAI 3.5)
 modelRegistry: true         # Model registry + dashboard menu
 mlflow: true                # MLflow operator + MLflow instance CR
-trustyai: false             # TrustyAI
+trustyai: true              # TrustyAI — required since RHOAI 3.5.1 (gen-ai-ui needs NemoGuardrails CRD)
 
 # --- DSCInitialization (dsci) ---
 # Only a few overrides; rest matches original defaults.

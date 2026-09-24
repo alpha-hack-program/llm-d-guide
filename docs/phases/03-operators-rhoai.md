@@ -3,7 +3,7 @@
 > Part of the [llm-d-guide Co-pilot Runbook](../../AGENTS.md). See the
 > [Phase Map](../../AGENTS.md#phase-map) for the full sequence.
 
-**Goal:** Install Connectivity Link, LeaderWorkerSet, monitoring operators (Tempo, OpenTelemetry), and RHOAI, then configure the DataScienceCluster.
+**Goal:** Install Connectivity Link, LeaderWorkerSet, monitoring operators (Tempo, OpenTelemetry), TrustyAI, and RHOAI, then configure the DataScienceCluster.
 
 > **Do NOT install the Kueue operator** unless you specifically need GPUaaS or distributed
 > workload queue management (Ray, PyTorch distributed training). Installing Kueue causes the
@@ -21,6 +21,10 @@ connectivity-link operator  →  Kuadrant CR (observability enabled, Ready defer
                        monitoring operators (Tempo, OpenTelemetry) — BEFORE RHOAI
                                        ↓
                                  RHOAI operator (OLM subscription)
+                                       ↓
+                                 (wait for CRDs)
+                                       ↓
+                                 TrustyAI — set Managed in DSC (required for Gen AI Studio playground)
                                        ↓
                                  (wait for CRDs)
                                        ↓
@@ -218,6 +222,26 @@ oc wait --for=condition=ready pod -l control-plane=odh-model-controller \
   -n redhat-ods-applications --timeout=300s
 oc wait --for=condition=ready pod -l control-plane=kserve-controller-manager \
   -n redhat-ods-applications --timeout=300s
+```
+
+### Step 6 — TrustyAI (required for Gen AI Studio playground)
+
+> **RHOAI 3.5.1+:** The `gen-ai-ui` backend attempts to discover `NemoGuardrails` CRs
+> (`trustyai.opendatahub.io/v1alpha1`) on every playground request. If TrustyAI is not
+> installed, API discovery fails and the playground returns HTTP 500. TrustyAI must be
+> `Managed` in the DSC even if you do not use guardrails.
+
+```bash
+# Enable TrustyAI in the DataScienceCluster
+oc patch datasciencecluster default-dsc --type merge \
+  -p '{"spec":{"components":{"trustyai":{"managementState":"Managed"}}}}'
+
+# Wait for the TrustyAI operator deployment
+oc rollout status deployment/trustyai-service-operator-controller-manager \
+  -n redhat-ods-applications --timeout=120s
+
+# Verify the NemoGuardrails CRD exists
+oc wait --for=condition=Established crd/nemoguardrails.trustyai.opendatahub.io --timeout=60s
 ```
 
 **Human gate:** All CSVs must show `Succeeded`. Run `./scripts/check-operators.sh` to verify.

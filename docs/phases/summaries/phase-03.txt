@@ -3,7 +3,7 @@
 ══════════════════════════════════════════════════════════════
 
 Goal:     Install Connectivity Link, LeaderWorkerSet, monitoring
-          operators (Tempo, OpenTelemetry), and RHOAI.
+          operators (Tempo, OpenTelemetry), RHOAI, and TrustyAI.
           Configure DataScienceCluster.
 Time:     ~20-30 min
 
@@ -26,6 +26,9 @@ Install method (all operators use OLMv0 on 4.20 and 4.21):
      → wait for operator ready
   5. RHOAI instance (DSCi + DSC) → two-pass apply
      → wait LLMInferenceService CRD + controller pods
+  6. TrustyAI → set Managed in DSC → wait operator ready
+     ⚠ Required since RHOAI 3.5.1 — gen-ai-ui needs
+       NemoGuardrails CRD or playground returns 500
 
 DO NOT: install Kueue, set modelsAsService=true, install
         Service Mesh 2.x or Serverless
