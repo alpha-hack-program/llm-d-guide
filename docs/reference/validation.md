@@ -61,8 +61,8 @@ oc get secret authorino-server-cert -n kuadrant-system
 ## ExternalModel credential secrets
 
 ```bash
-# Must have bbr-managed label
-oc get secrets -A -l inference.networking.k8s.io/bbr-managed=true
+# Must have ipp-managed label (changed from bbr-managed in 3.5)
+oc get secrets -A -l inference.llm-d.ai/ipp-managed=true
 ```
 
 ## Optional — Kueue status

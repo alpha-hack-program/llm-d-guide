@@ -21,11 +21,12 @@ oc delete maassubscription --all -n models-as-a-service 2>/dev/null || true
 # 3. MaaSModelRefs — each one owns an HTTPRoute on the MaaS gateway
 oc delete maasmodelref --all -n ${MODEL_NAMESPACE} 2>/dev/null || true
 
-# 4. ExternalModels — removes ext_proc routing and credential-store entries
-oc delete externalmodel --all -n ${MODEL_NAMESPACE} 2>/dev/null || true
+# 4. ExternalProviders and ExternalModels (3.5 two-resource pattern)
+oc delete externalmodel.inference.opendatahub.io --all -n ${MODEL_NAMESPACE} 2>/dev/null || true
+oc delete externalprovider.inference.opendatahub.io --all -n ${MODEL_NAMESPACE} 2>/dev/null || true
 
-# 5. ExternalModel credential secret
-oc delete secret -n ${MODEL_NAMESPACE} -l inference.networking.k8s.io/bbr-managed=true \
+# 5. ExternalModel credential secrets
+oc delete secret -n ${MODEL_NAMESPACE} -l inference.llm-d.ai/ipp-managed=true \
   2>/dev/null || true
 
 # 6. OpenShift Groups created by the demos (keeps cluster-admins and rhods-admins)

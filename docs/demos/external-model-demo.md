@@ -4,7 +4,7 @@
 >
 > See also: [MaaS Demo](maas-demo.md) | [Full MaaS Reset](maas-reset.md)
 
-An `ExternalModel` lets you publish any OpenAI-compatible API endpoint, through the same MaaS gateway, giving it identical API key auth, token rate limiting, and subscription controls as a native llm-d model. No GPU workload is deployed: the `ExternalModel` CR is just a pointer to an existing endpoint with an attached credential.
+An `ExternalModel` lets you publish any OpenAI-compatible API endpoint through the same MaaS gateway, giving it identical API key auth, token rate limiting, and subscription controls as a native llm-d model. No GPU workload is deployed — RHOAI 3.5 uses a two-resource pattern: an `ExternalProvider` (endpoint + credentials) and an `ExternalModel` that references it. Both use `apiVersion: inference.opendatahub.io/v1alpha1`.
 
 **Demo layout:**
 
@@ -57,9 +57,11 @@ Before creating an ExternalModel, understand these **mandatory** constraints:
      name: qwen3-14b              # <- MUST match
    ```
 
-2. **Credential secret requires the label `inference.networking.k8s.io/bbr-managed: "true"`.**
+2. **Credential secret requires the label `inference.llm-d.ai/ipp-managed: "true"`.**
 
-   The `payload-processing` ext_proc service uses this label as a predicate — secrets without it are silently ignored and the credential store is never populated, causing every call to fail with `"provider 'openai' credentials not found"`.
+   Secrets without this label are silently ignored — the credential store is never populated and every request fails with `"provider 'openai' credentials not found"`. The secret data field must be named `api-key` (not `OPENAI_API_KEY`).
+
+   > **Migration note:** The 3.4 label was `inference.networking.k8s.io/bbr-managed: "true"` — update it when migrating to 3.5.
 
 3. **MaaSModelRef must be created manually.**
 
@@ -77,22 +79,37 @@ metadata:
   name: litellm-credentials
   namespace: ${MODEL_NAMESPACE}
   labels:
-    inference.networking.k8s.io/bbr-managed: "true"
+    inference.llm-d.ai/ipp-managed: "true"
 type: Opaque
 stringData:
   api-key: "<LITELLM_API_KEY>"
 ---
-apiVersion: maas.opendatahub.io/v1alpha1
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalProvider
+metadata:
+  name: litellm-provider
+  namespace: ${MODEL_NAMESPACE}
+spec:
+  provider: openai
+  endpoint: <LITELLM_ENDPOINT>
+  auth:
+    type: apikey
+    secretRef:
+      name: litellm-credentials
+---
+apiVersion: inference.opendatahub.io/v1alpha1
 kind: ExternalModel
 metadata:
   name: qwen3-14b
   namespace: ${MODEL_NAMESPACE}
 spec:
-  provider: openai
-  endpoint: <LITELLM_ENDPOINT>
-  targetModel: qwen3-14b
-  credentialRef:
-    name: litellm-credentials
+  externalProviderRefs:
+  - ref:
+      name: litellm-provider
+    targetModel: qwen3-14b
+    apiFormat: openai-chat
+    path: /v1/chat/completions
+    weight: 100
 ---
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
@@ -132,7 +149,8 @@ metadata:
 spec:
   owner:
     groups:
-      - name: premium-users
+      - kind: Group
+        name: premium-users
   modelRefs:
     - name: qwen3-14b
       namespace: ${MODEL_NAMESPACE}
@@ -274,7 +292,8 @@ See [`EXTERNAL-MONITORING-INTEGRATION.md`](../../gitops/instance/llm-d-observabi
 oc delete maasauthpolicy external-premium-auth-policy -n models-as-a-service 2>/dev/null || true
 oc delete maassubscription external-premium-subscription -n models-as-a-service 2>/dev/null || true
 oc delete maasmodelref qwen3-14b -n ${MODEL_NAMESPACE} 2>/dev/null || true
-oc delete externalmodel qwen3-14b -n ${MODEL_NAMESPACE} 2>/dev/null || true
+oc delete externalmodel.inference.opendatahub.io qwen3-14b -n ${MODEL_NAMESPACE} 2>/dev/null || true
+oc delete externalprovider.inference.opendatahub.io litellm-provider -n ${MODEL_NAMESPACE} 2>/dev/null || true
 oc delete secret litellm-credentials -n ${MODEL_NAMESPACE} 2>/dev/null || true
 # Also removes the HTTPRoute created by the maas-controller:
 oc delete httproute qwen3-14b -n ${MODEL_NAMESPACE} 2>/dev/null || true
