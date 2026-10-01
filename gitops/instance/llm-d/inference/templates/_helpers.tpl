@@ -48,10 +48,9 @@ User extraArgs are appended after framework-managed flags.
 {{- if $shouldEnablePrefixCaching -}}
 {{- $args = append $args "--enable-prefix-caching" -}}
 {{- end -}}
-{{- /* Auto-inject --served-model-name when serviceName differs from model.name */ -}}
-{{- if ne .Values.serviceName .Values.model.name -}}
-{{- $args = append $args (printf "--served-model-name=%s" .Values.serviceName) -}}
-{{- end -}}
+{{- /* --served-model-name is set by the vLLM entrypoint script with both the
+   model name and the publishers/ alias — do not override it here, or the
+   last-flag-wins behavior causes the entrypoint aliases to be lost. */ -}}
 {{- /* Append user extra args */ -}}
 {{- if and .Values.vllm .Values.vllm.extraArgs -}}
 {{- range .Values.vllm.extraArgs -}}
