@@ -15,6 +15,6 @@ spec:
     default:
       labels:
         model: responseBodyJSON("/model")
-        tier: auth.identity.selected_subscription
+        subscription: auth.identity.selected_subscription
         user: auth.identity.userid
 {{- end }}
