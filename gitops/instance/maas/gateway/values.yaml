@@ -18,8 +18,15 @@ gateway:
   # LoadBalancer: for clusters with a cloud LB controller (AWS, GCP, Azure).
   serviceType: ClusterIP
   # Extra namespaces whose HTTPRoutes the Gateway will accept.
-  # redhat-ods-applications, redhat-ai-gateway-infra, and models-as-a-service
-  # are always included.
+  # Only this Gateway's own namespace and redhat-ai-gateway-infra (shared maas-api
+  # infra, needed by every tenant's own maas-api-route HTTPRoute) are always
+  # included. For the Phase 6 DEFAULT tenant's gateway, explicitly add
+  # models-as-a-service and redhat-ods-applications here if a route in either
+  # namespace needs to attach. For a Phase 7 additional tenant's gateway, list
+  # only that tenant's own namespace (e.g. ai-tenant-<name>) — do NOT add
+  # models-as-a-service/redhat-ods-applications, which belong to the default
+  # tenant only; doing so would let the default tenant's routes attach to a
+  # non-default tenant's gateway, defeating tenant isolation.
   modelNamespaces: []
 
 # true  → expose via an OpenShift Route fronting the ClusterIP Gateway service.

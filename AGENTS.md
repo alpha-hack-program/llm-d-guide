@@ -74,6 +74,8 @@ troubleshooting) is in [`docs/reference/`](docs/reference/).
 | 4 | Monitoring stack | [docs/phases/04-monitoring.md](docs/phases/04-monitoring.md) | 10 min | Optional sign-off |
 | 5 | llm-d Quick Start | [docs/phases/05-llmd-quickstart.md](docs/phases/05-llmd-quickstart.md) | 15–20 min | Review curl test output |
 | 6 | MaaS | [docs/phases/06-maas.md](docs/phases/06-maas.md) | 10–15 min | Verify `LLMInferenceService` `Ready: True` via MaaS route |
+| 7 | MaaS Multi-Tenant | [docs/phases/07-maas-multi-tenant.md](docs/phases/07-maas-multi-tenant.md) | 15–20 min | Each tenant's API key only works against its own gateway/models |
+| 8 | MCP Gateway | [docs/phases/08-mcp-gateway.md](docs/phases/08-mcp-gateway.md) | 15–20 min (+5 min/tenant) | Authenticated `tools/list` returns 200; no-token request returns 401 |
 
 ---
 
@@ -136,10 +138,32 @@ Deploy the gateway, a namespace, and an LLMInferenceService, then test the endpo
 ### Phase 6 — MaaS
 Deploy the MaaS gateway, configure Authorino TLS, bootstrap the subscription stack, and verify API key creation.
 **Critical:** Order matters: gateway → database → enable `modelsAsService=true` (sets `aigateway.modelsAsAService: Managed` in DSC v2) → Authorino TLS. Without Authorino TLS, the API key endpoint returns 500.
-**RHOAI 3.5 change:** The default MaaS infrastructure namespace is now `redhat-ai-gateway-infra` (was `redhat-ods-applications` in 3.4). The `maas-db-config` secret and `maas-api` deployment live in this namespace. The `Tenant` CR is deprecated — it will be replaced by `AITenant` + `MaasTenantConfig` in a future release (still functional in 3.5).
+**RHOAI 3.5 change:** The default MaaS infrastructure namespace is now `redhat-ai-gateway-infra` (was `redhat-ods-applications` in 3.4). The `maas-db-config` secret and `maas-api` deployment live in this namespace.
+**RHOAI 3.5 architecture:** The `Tenant` CRD is a deprecated no-op compatibility shim — it has no effect. The real objects are `Config` (cluster singleton) → `AITenant` → `MaasTenantConfig`, which **auto-bootstrap** the moment `modelsAsService=true` reconciles (no manual namespace creation or CR apply needed). Verify with `oc wait aitenant models-as-a-service -n ai-tenants --for=condition=Ready` and `oc get maastenantconfig default-tenant -n models-as-a-service`. For custom settings, patch the `MaasTenantConfig` directly — never create a `Tenant` CR.
 **RHOAI 3.5 change:** MaaS supports body-based model routing (`/v1/chat/completions` with model name in the JSON body). The gateway parses the body and injects an `X-Gateway-Model-Name` header for HTTPRoute matching. If body-based routing returns 404, use path-based routing (`/<namespace>/<model>/v1/chat/completions`) which is the primary and most reliable method.
 **Authorino TLS race condition:** The `odh-model-controller`'s `gateway-auth-bootstrap` controller does a one-shot check when it sees the gateway annotation — if Authorino TLS is not fully active at that moment, it skips EnvoyFilter creation and never retries. Steps 4a–4c must be verified before applying 4d. If the EnvoyFilter is missing after 4d, restart `odh-model-controller`.
 **Full guide:** [docs/phases/06-maas.md](docs/phases/06-maas.md)
+
+### Phase 7 — MaaS Multi-Tenant
+Add one or more additional, fully isolated MaaS tenants (e.g. "team-alpha", "team-beta"), each with its own dedicated `Gateway`, tenant namespace, `maas-api` instance, and RBAC — on top of the default tenant from Phase 6.
+**Critical:**
+- **One `Gateway` per `AITenant`, strictly enforced.** The `vaitenant.kb.io` admission webhook rejects any `AITenant` whose `spec.gateway.name` is already claimed by another `AITenant`. `maas-default-gateway` is permanently owned by the default tenant from Phase 6 — every new tenant needs its own freshly deployed `Gateway` first, via the same chart as Phase 6 (`gitops/instance/maas/gateway`), with a distinct `gateway.name`/`subdomain`.
+- **Chart fix required if deploying more than one gateway with telemetry enabled in the same namespace:** `templates/telemetrypolicy.yaml` names the `TelemetryPolicy` after `{{ .Values.gateway.name }}-telemetry` (previously hardcoded to a single name) — confirm this fix is present before deploying a second gateway with `telemetry.enabled=true`.
+- **Creating an `AITenant` auto-provisions everything else** — no manual namespace creation, no manual `Tenant`/`MaasTenantConfig` apply: a tenant namespace named `ai-tenant-<name>`, a `MaasTenantConfig` named `default-tenant` inside it, a `maas-api-<name>` Deployment in the shared `redhat-ai-gateway-infra` namespace, and a `Role` named `aitenant-<name>-tenant-admin` in the tenant namespace. (The *default* tenant from Phase 6 is a special case whose tenant namespace is `models-as-a-service`, not `ai-tenant-models-as-a-service` — don't generalize from it.)
+- **`spec.rbac.admins` on `AITenant` is deprecated and ignored by the controller.** Create standard `RoleBinding`s against the auto-created `aitenant-<name>-tenant-admin` Role yourself.
+- Deploy each tenant's models into its own tenant namespace, with the per-model inference chart's `maas.gateway.name`/`maas.gateway.namespace` set to that tenant's dedicated gateway — this is what drives the generated `HTTPRoute`'s `parentRefs` to the correct gateway.
+- `MaaSSubscription`/`MaaSAuthPolicy` for a tenant live inside that tenant's own namespace, scoped by its tenant-admin RBAC.
+**Full guide:** [docs/phases/07-maas-multi-tenant.md](docs/phases/07-maas-multi-tenant.md)
+
+### Phase 8 — MCP Gateway
+**Optional, standalone from RHOAI/llm-d/MaaS.** Deploy a shared RHCL (Kuadrant) MCP Gateway — one `Gateway` object, multiple isolated tenants — for projects that need gateway-routed, OIDC-authenticated access to MCP tool servers. Chart: `gitops/instance/mcp-gateway`. Operator: `gitops/operators/mcp-gateway-operator`.
+**Critical:**
+- **Requires a second, separate OLM package beyond `rhcl-operator` (Phase 3).** `mcp-gateway` (MCP Gateway Operator, Tech Preview, channel `preview`, its own `0.7.x` versioning) provides the `MCPGatewayExtension`/`MCPServerRegistration` CRDs this chart's templates use — a cluster with only RHCL installed has neither CRD, and fails with `no matches for kind "MCPGatewayExtension"`, easy to misread as an RHCL version problem.
+- **One `Gateway` is shared by every tenant.** Each `tenants[]` entry in the chart's values gets its own listener pair (`<tenant>-mcp`/`<tenant>-mcps`), `Route`, `MCPGatewayExtension`, and `AuthPolicy` pair — independently named, trusting only that tenant's own Keycloak realm issuer. Adding a tenant and re-applying never edits another tenant's objects.
+- **Never use `--set` for `tenants[]` fields.** Confirmed live: `--set tenants[0].x=y` replaces the whole list item, silently dropping even `name` — objects render as `mcp-gateway-authn-` with `sectionName: -mcp`, with no error. Always use `-f <file>.yaml`, and list every tenant you want kept — a `tenants:` list from `-f` replaces the previous release's list wholesale, it is not merged by name.
+- **The `<gateway-name>-istio` ExternalName alias is required on OpenShift** (any `className` other than `istio`) — without it, tool discovery succeeds but every tool *invocation* fails with a DNS lookup error, since the Tech Preview operator's broker dials itself back through a Service name OpenShift's own Gateway API controller never creates.
+- A tenant's actual MCP servers (`HTTPRoute`s/`MCPServerRegistration`s for specific tools) are **not** created by this chart — owned by whichever project registers servers against that tenant's `<tenant>-mcps` sectionName.
+**Full guide:** [docs/phases/08-mcp-gateway.md](docs/phases/08-mcp-gateway.md)
 
 ---
 

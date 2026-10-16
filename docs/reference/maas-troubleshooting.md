@@ -383,3 +383,121 @@ The NemoGuardrails CRD will exist (with zero instances), the discovery succeeds,
 The maas-controller may log `"failed to update MaaSAuthPolicy status"` in a tight loop. This is a
 controller/CRD version mismatch (controller writes `accepted`/`enforced`; CRD requires `ready`).
 Auth and rate limits work correctly — ignore this log noise.
+
+## Multi-tenant MaaS (Phase 7) — findings confirmed on a live cluster
+
+The following were validated end-to-end while deploying two real tenants (`team-alpha`,
+`team-beta`) with models and smoke-testing isolation — see
+[Phase 7 — MaaS Multi-Tenant](../phases/07-maas-multi-tenant.md).
+
+### `LLMInferenceService` lands in the wrong namespace (fixed in the chart)
+
+**Symptom (older checkouts only):** After `helm template gitops/instance/llm-d/inference -n
+<tenant-ns> ... | oc apply -f -`, the `MaaSModelRef` and `ServiceMonitor`s appear correctly in
+`<tenant-ns>`, but `oc get llminferenceservice -n <tenant-ns>` returns nothing. The model and its
+connection `Secret` instead appear in your current `oc` context's namespace (often `default`).
+
+**Root cause:** The chart's `LLMInferenceService`/`pd-disaggregation` and connection `Secret`
+templates (`templates/intelligent-inference.yaml`, `templates/pd-disaggregation.yaml`,
+`templates/connections.yaml`) did not set `metadata.namespace`, unlike
+`MaaSModelRef`/`ServiceMonitor`, which explicitly set `namespace: {{ .Release.Namespace }}`.
+`helm template -n <ns>` only populates `.Release.Namespace` for templates that reference it — it
+has no effect on where `oc apply -f -` sends a resource with no namespace in its manifest. That
+falls through to `oc apply`'s ambient current-namespace context.
+
+**Fix (applied):** All three templates now explicitly set `namespace: {{ .Release.Namespace }}`.
+`oc apply -n <tenant-ns> -f -` is still good practice, but is no longer required for correct
+placement. If you're on an older checkout without this fix: always pass `oc apply -n <tenant-ns>
+-f -` explicitly, and if a model already landed in the wrong namespace, run
+`oc delete llminferenceservice <name> -n <wrong-ns>` and
+`oc delete secret <name>-connection -n <wrong-ns>`, then re-apply with the explicit `-n`.
+
+### `maas-api-<tenant>` Deployments share one pod selector across all tenants
+
+**Symptom:** `oc logs deployment/maas-api-team-alpha -n redhat-ai-gateway-infra` reports "Found
+N pods" where N is far more than 1, and may show log lines from other tenants' `maas-api`
+instances or `maas-api-key-cleanup` CronJob pods.
+
+**Root cause:** Every per-tenant `maas-api-<tenant>` Deployment (and the original `maas-api`)
+uses the identical selector `app.kubernetes.io/name: maas-api`,
+`app.kubernetes.io/component: api`, `app.kubernetes.io/part-of: models-as-a-service` — with no
+tenant-distinguishing label. `oc get deployment` still correctly reports one owned pod per
+Deployment (ReplicaSet ownership is tracked separately), but any command that resolves pods by
+label — including `oc logs deployment/...`, which falls back to label selection — can match
+pods belonging to a different tenant.
+
+**Fix:** Get the exact pod name first, then target it directly:
+```bash
+oc get pods -n redhat-ai-gateway-infra | grep <tenant>
+oc logs pod/maas-api-<tenant>-<hash> -n redhat-ai-gateway-infra
+```
+
+### New group membership doesn't apply to API key minting for several minutes
+
+**Symptom:** Immediately after `oc adm groups new <tenant>` + `oc adm groups add-users <tenant>
+<user>`, that user's `POST /v1/api-keys` against the tenant's gateway fails:
+```json
+{"code":"invalid_subscription","error":"Unable to resolve a subscription for this API key"}
+```
+even though the `MaaSSubscription`/`MaaSAuthPolicy` for that group are correctly configured and
+`Active`.
+
+**Root cause:** `TokenReview`'s reported `user.groups` lags live `Group` object changes by
+roughly 2–3 minutes. `maas-api` resolves the subscription from the groups `TokenReview` reports
+for the bearer token, not from a live `Group` lookup — so it sees the user as not yet a member.
+
+**Diagnosis:**
+```bash
+oc create -f - -o json <<EOF | python3 -c "import json,sys; print(json.load(sys.stdin)['status']['user']['groups'])"
+apiVersion: authentication.k8s.io/v1
+kind: TokenReview
+spec:
+  token: $(oc whoami -t)
+EOF
+```
+If the tenant's group is missing from the printed list, this is the cause.
+
+**Fix:** Wait 2–3 minutes after the group change and retry. Do not touch the
+`MaaSSubscription`/`MaaSAuthPolicy`/RBAC config — they are not the problem.
+
+### `MaaSSubscription` shows `Failed` right after creation — self-heals
+
+**Symptom:** A freshly created `MaaSSubscription` shows `phase: Failed` with
+`modelRefStatuses[].reason: NotFound` and message `HTTPRoute not found yet`.
+
+**Root cause:** The `MaaSSubscription` was created before its referenced model's
+`LLMInferenceService` reached `Ready` — the model's `HTTPRoute` doesn't exist until then, and
+the subscription controller needs it to build the `TokenRateLimitPolicy`.
+
+**Fix:** None needed — this is transient. `maas-controller` reconciles continuously; both
+`MaaSSubscription` and `MaaSAuthPolicy` flip to `Active` on their own once the model becomes
+`Ready`. Do not delete and recreate them. Verify with
+`oc get maassubscription,maasauthpolicy -n <tenant-ns>`.
+
+### Additional tenants never appear in the RHOAI dashboard (Gen AI Studio)
+
+**Symptom:** After completing Phase 7 and confirming a tenant (e.g. `team-alpha`) works via
+direct API calls (minting keys, calling models), none of its models, subscriptions, API keys, or
+auth policies ever show up in the RHOAI dashboard's Gen AI Studio pages — only the default
+tenant's data is visible, no matter how long you wait or refresh.
+
+**Root cause:** Confirmed via `maas-ui` logs (`oc logs -n redhat-ods-applications
+deployment/maas-ui`). Gen AI Studio's Model Catalog/Subscriptions/API Keys/Authorization Policies
+pages are served by the `maas-ui` Deployment, which is hardcoded to a single Kubernetes Service:
+```
+msg="Resolved maas-api namespace from DSC release" namespace=redhat-ai-gateway-infra
+msg="Discovering MaaS API URL via /v1/tenants" internalURL=https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443
+msg="Discovered MaaS API URL from /v1/tenants" tenant=models-as-a-service gateway=maas-default-gateway url=https://maas.apps.<cluster>/maas-api
+```
+At startup, `maas-ui` calls `GET /v1/tenants` on exactly one `maas-api` Service —
+`maas-api.redhat-ai-gateway-infra.svc:8443`, the **default tenant's** instance — and permanently
+locks onto whatever single tenant/gateway that call reports. It never discovers or contacts
+`maas-api-<tenant>` Services created for additional `AITenant`s (Phase 7); there is no
+per-tenant selector, tenant-switcher, or multi-backend logic in this component.
+
+**Fix:** None available from this repo — `maas-ui` ships as a RHOAI container image
+(`odh-mod-arch-maas-rhel9`), not a chart this guide controls. This is a genuine RHOAI 3.5 product
+limitation, not a misconfiguration. Manage additional tenants entirely via API/CLI against their
+own gateway hostname (`https://<tenant>.<cluster-domain>/v1/api-keys`, etc.), as in
+[Phase 7 Step 6](../phases/07-maas-multi-tenant.md#step-6--smoke-test-tenant-isolation) — do not
+expect dashboard visibility for anything beyond the default tenant.

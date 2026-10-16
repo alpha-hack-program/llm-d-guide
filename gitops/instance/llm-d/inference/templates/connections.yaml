@@ -4,6 +4,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Values.serviceName }}-connection
+  namespace: {{ .Release.Namespace }}
   labels:
     opendatahub.io/dashboard: 'true'
   annotations:

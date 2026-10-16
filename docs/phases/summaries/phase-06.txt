@@ -9,7 +9,8 @@ Time:     ~10-15 min
 RHOAI 3.5 changes:
   - MaaS infra namespace: redhat-ai-gateway-infra (was redhat-ods-applications)
   - DSC field: aigateway.modelsAsAService (was kserve.modelsAsService)
-  - Tenant CR deprecated (still works; AITenant + MaasTenantConfig in future)
+  - Tenant CR is a deprecated no-op shim; Config/AITenant/MaasTenantConfig
+    auto-bootstrap on modelsAsService=true — nothing to apply manually
   - Body-based model routing supported (/v1/chat/completions with model name)
 
 Order matters:
@@ -20,7 +21,8 @@ Order matters:
   4. Configure Authorino TLS for MaaS
      ⚠ Without Authorino TLS, API key endpoint returns 500
      ⚠ Race condition: steps 4a-4c must complete before 4d
-  5. Create Tenant CR in models-as-a-service namespace
+  5. Verify auto-bootstrapped AITenant/MaasTenantConfig/maas-api
+     ⚠ Do NOT create a Tenant CR — it's a no-op compatibility shim
   6. Deploy or publish a model for MaaS
      (publish existing Phase 5 model OR deploy a new one)
   7. Bootstrap subscription stack (MaaSSubscription + MaaSAuthPolicy)

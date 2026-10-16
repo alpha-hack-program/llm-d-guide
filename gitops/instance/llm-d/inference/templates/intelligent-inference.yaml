@@ -53,6 +53,7 @@ apiVersion: serving.kserve.io/v1alpha2
 kind: LLMInferenceService
 metadata:
   name: {{ .Values.serviceName }}
+  namespace: {{ .Release.Namespace }}
   annotations:
     opendatahub.io/model-type: generative
     opendatahub.io/runtime-version: {{ .Values.runtime.version}}

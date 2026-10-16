@@ -479,7 +479,7 @@ flowchart TD
 
     subgraph MAS["models-as-a-service"]
         direction TB
-        TENANT["Tenant  default-tenant\nmaxExpirationDays: 90"]
+        TENANT["MaasTenantConfig  default-tenant\nmaxExpirationDays: 90\n(auto-created by AITenant — see §9.5)"]
         MSUB["MaaSSubscription  admin-subscription\ntokenRateLimits: 100k / 1h"]
         MAAP["MaaSAuthPolicy  admin-auth-policy\ngroups: cluster-admins"]
     end
@@ -565,7 +565,8 @@ flowchart TD
 | `Authorino`, `Limitador` | `kuadrant-system` | Kuadrant operator |
 | `maas-api`, `maas-controller`, `maas-db` | `redhat-ai-gateway-infra` | RHOAI operator |
 | `HTTPRoute` maas-api-route | `redhat-ai-gateway-infra` | RHOAI operator |
-| `Tenant`, `MaaSSubscription`, `MaaSAuthPolicy` | `models-as-a-service` | You |
+| `AITenant` | `ai-tenants` | Auto-created (`Config` singleton bootstraps the default tenant once `modelsAsService=true`) |
+| `MaasTenantConfig`, `MaaSSubscription`, `MaaSAuthPolicy` | `models-as-a-service` | `MaasTenantConfig` is auto-created by the `AITenant`; `MaaSSubscription`/`MaaSAuthPolicy` are you |
 | `MaaSModelRef` | `llm-d-demo` (model namespace) | Inference chart (`maas.enabled=true`) or dashboard toggle |
 | `AuthPolicy`, `TokenRateLimitPolicy` | `llm-d-demo` | `maas-controller` |
 | `HTTPRoute`, `InferencePool` (model) | `llm-d-demo` | `odh-model-controller` / kserve controller |
@@ -595,7 +596,7 @@ flowchart TD
 3. **MaaS Database** — PostgreSQL + `maas-db-config` secret
 4. **Enable MaaS in DSC** — re-apply RHOAI chart with `modelsAsService=true`
 5. **Authorino TLS** — annotate service → patch CR → set env vars → annotate gateway
-6. **Bootstrap subscriptions** — `models-as-a-service` namespace + Tenant + DB_CONNECTION_URL patch
+6. **Verify the default tenant auto-bootstrap** — `Config` → `AITenant` → `MaasTenantConfig` reconcile automatically once step 4 lands; nothing to apply manually
 7. **Register models** — MaaSModelRef + MaaSSubscription + MaaSAuthPolicy
 8. **Enable dashboard** — four `OdhDashboardConfig` flags
 
@@ -603,6 +604,7 @@ flowchart TD
 > - Use `tls.secretName=router-certs-default`, **not** `ingress-certs` — the service-ca-operator overwrites `ingress-certs` with an internal-only cert. See [Phase 6 Step 1](docs/phases/06-maas.md#step-1--maas-gateway) for details.
 > - `modelsAsService` must stay `false` during Phase 3. The `maas-api` pod requires both the gateway and database to exist before starting.
 > - Without Authorino TLS, `POST /maas-api/v1/api-keys` returns `500`.
+> - The `Tenant` CRD is a deprecated no-op compatibility shim — do not create one. The real objects (`Config`, `AITenant`, `MaasTenantConfig`) auto-bootstrap; see [Phase 6 Step 5](docs/phases/06-maas.md#step-5--verify-the-default-tenant-auto-bootstrap).
 
 ### 9.3 Publish a Model to MaaS
 
@@ -686,7 +688,22 @@ oc get tokenratelimitpolicy -n llm-d-demo
 oc get tokenratelimitpolicy maas-trlp-qwen3-8b -n llm-d-demo -o yaml
 ```
 
-### 9.5 MaaS Troubleshooting
+### 9.5 Multi-Tenant MaaS (Optional)
+
+Beyond the single default tenant set up above, MaaS supports additional fully isolated tenants —
+each with its own dedicated `Gateway`, tenant namespace, `maas-api` instance, and RBAC, with no
+shared subscriptions, auth policies, or rate limits between tenants.
+
+The tenant model is `Config` (cluster singleton) → `AITenant` → `MaasTenantConfig`: creating an
+`AITenant` auto-provisions everything beneath it. The one hard constraint, enforced by an
+admission webhook: **every `AITenant` requires its own dedicated `Gateway`** —
+`maas-default-gateway` is already claimed by the default tenant above and cannot be shared.
+
+Follow [Phase 7 — MaaS Multi-Tenant](docs/phases/07-maas-multi-tenant.md) for the full
+per-tenant install sequence (dedicated gateway → `AITenant` → RBAC → model → subscription/auth
+policy → cross-tenant isolation smoke test).
+
+### 9.6 MaaS Troubleshooting
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |

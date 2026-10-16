@@ -2,7 +2,7 @@
 apiVersion: extensions.kuadrant.io/v1alpha1
 kind: TelemetryPolicy
 metadata:
-  name: maas-gateway-telemetry
+  name: {{ .Values.gateway.name }}-telemetry
   namespace: {{ .Values.gateway.namespace }}
   annotations:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true

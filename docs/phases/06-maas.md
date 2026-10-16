@@ -36,11 +36,13 @@ helm template gitops/instance/maas/gateway --name-template maas-gateway \
   --set clusterDomain="${CLUSTER_DOMAIN}" \
   --set useOpenShiftRoute=true \
   --set tls.secretName=ingress-certs \
-  --set "gateway.modelNamespaces={llm-d-demo}" | oc apply -f -
+  --set "gateway.modelNamespaces={llm-d-demo,models-as-a-service,redhat-ods-applications}" | oc apply -f -
 oc get gateway maas-default-gateway -n openshift-ingress
 ```
 
 > **TLS secret — human gate:** The default `ingress-certs` is the wildcard cert from Phase 1 (cert-manager / Let's Encrypt). For non-cloud or bare-metal installs where this secret does not exist, **stop and ask the user** which TLS secret to use (e.g. `router-certs-default` or a custom cert).
+
+> **Chart change (tenant isolation fix):** `models-as-a-service` and `redhat-ods-applications` used to be hardcoded into every gateway's `allowedRoutes`, regardless of tenant — a real isolation gap once Phase 7 adds more tenant gateways (any default-tenant `HTTPRoute` could attach to another tenant's gateway). The chart now only hardcodes this gateway's own namespace and the shared `redhat-ai-gateway-infra` (needed by every tenant's own `maas-api-route`). For the **default** tenant's gateway only, `models-as-a-service`/`redhat-ods-applications` must now be listed explicitly in `modelNamespaces` as shown above — a Phase 7 tenant's gateway must **not** include them (see [Phase 7](07-maas-multi-tenant.md)).
 
 ### Step 2 — MaaS Database
 
@@ -181,46 +183,32 @@ oc get envoyfilter maas-default-gateway-authn-ssl -n openshift-ingress
 # Expected: present (created by odh-model-controller after annotation)
 ```
 
-### Step 5 — Bootstrap subscription namespace
+### Step 5 — Verify the default tenant auto-bootstrap
 
-`models-as-a-service` namespace + `default-tenant` CR (name is exact):
+> **RHOAI 3.5 architecture note:** The `Tenant` CRD is a deprecated compatibility shim only —
+> it has **no effect** on this RHOAI version. The instant `modelsAsService=true` reconciles
+> (Step 3), `maas-controller` auto-creates, with no manual action: a cluster-wide `Config`
+> singleton (`default`) → a default `AITenant` named `models-as-a-service` bound to
+> `maas-default-gateway` → the `models-as-a-service` namespace → a `MaasTenantConfig` named
+> `default-tenant` inside it → the `maas-api` deployment. Applying a `Tenant` CR here does
+> nothing but create a `deprecated-by: MaasTenantConfig` marker object — **do not create one.**
 
-> **RHOAI 3.5 deprecation notice:** The `Tenant` CR is deprecated in RHOAI 3.5 and will be replaced
-> by `AITenant` + `MaasTenantConfig` in a future release. The `Tenant` CR still works in 3.5 and
-> these instructions remain valid, but plan to migrate to the new CRs when they become available.
-
+Just wait for the auto-bootstrapped chain to go `Ready`, then verify:
 ```bash
-# Create namespace
-oc create namespace models-as-a-service --dry-run=client -o yaml | oc apply -f -
-
-# Create Tenant CR (global MaaS configuration object)
-# The Tenant controls:
-#   - API key settings (maxExpirationDays: max lifetime for generated keys)
-#   - Gateway reference (which Gateway to use for model routing)
-#   - Optional: external OIDC, telemetry config
-# The maas-api pod is hardcoded to look for "default-tenant" in models-as-a-service namespace
-cat <<'EOF' | oc apply -f -
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: Tenant
-metadata:
-  name: default-tenant              # MUST be exactly "default-tenant"
-  namespace: models-as-a-service
-spec:
-  apiKeys:
-    maxExpirationDays: 90           # Max API key lifetime (adjust for your security policy)
-  gatewayRef:
-    name: maas-default-gateway      # Which Gateway to use for model routing
-    namespace: openshift-ingress
-EOF
-```
-
-**Verify maas-api is reading the database secret:**
-```bash
+oc wait aitenant models-as-a-service -n ai-tenants --for=condition=Ready --timeout=120s
+oc get maastenantconfig default-tenant -n models-as-a-service
 oc wait --for=condition=available deployment/maas-api \
   -n redhat-ai-gateway-infra --timeout=120s
 ```
 
 > RHOAI wires `DB_CONNECTION_URL` from the `maas-db-config` secret automatically when it creates the `maas-api` deployment. No manual patching is needed. If `modelsAsService` was already `Managed` before the secret existed (wrong order), run `oc rollout restart deployment/maas-api -n redhat-ai-gateway-infra` — do not patch the deployment, as RHOAI's reconciliation loop will overwrite any manual env var changes.
+
+**Customizing tenant settings (optional):** For non-default values (e.g. a shorter API key
+lifetime), patch the auto-created `MaasTenantConfig` directly — do not create a `Tenant` CR:
+```bash
+oc patch maastenantconfig default-tenant -n models-as-a-service --type=merge \
+  -p '{"spec":{"apiKeys":{"maxExpirationDays":30}}}'
+```
 
 ### Step 6 — Deploy or publish a model for MaaS
 
@@ -314,7 +302,7 @@ EOF
 > **Multiple models:** To register both models, list all modelRefs in a single MaaSSubscription and MaaSAuthPolicy — each with its own `tokenRateLimits` entry.
 
 **Critical schema notes:**
-- `MaaSSubscription`, `MaaSAuthPolicy`, `Tenant`, and `MaaSModelRef` use `apiVersion: maas.opendatahub.io/v1alpha1`
+- `MaaSSubscription`, `MaaSAuthPolicy`, `AITenant`, `MaasTenantConfig`, and `MaaSModelRef` use `apiVersion: maas.opendatahub.io/v1alpha1` (the legacy `Tenant` kind is also registered but is a no-op compatibility shim — do not use it)
 - `ExternalModel` and `ExternalProvider` use `apiVersion: inference.opendatahub.io/v1alpha1` (moved from `maas.opendatahub.io` in 3.5 — see [ExternalModel Guide](../reference/external-models.md))
 - `owner.groups` is a **list of objects** with `kind: Group` + `name`, NOT a list of strings
 - `tokenRateLimits` is **required on each modelRef**, with `window` and `limit` fields
@@ -371,6 +359,9 @@ curl -sk "https://${MAAS_GW}/v1/chat/completions" \
 
 ## Known gotchas
 
+- **Each `AITenant` requires its own dedicated `Gateway` — one-to-one, enforced by an admission webhook.** `vaitenant.kb.io` rejects any `AITenant` whose `spec.gateway.name` points at a `Gateway` already claimed by another `AITenant`:
+  `gateway openshift-ingress/maas-default-gateway is already in use by AITenant ai-tenants/models-as-a-service; each AITenant requires a dedicated Gateway for isolation`.
+  This means `maas-default-gateway` is permanently claimed by the default tenant — any additional tenant (see [Phase 7](07-maas-multi-tenant.md)) needs its own freshly deployed `Gateway` before its `AITenant` can be created.
 - **`AUTH_FAILURE` on `POST /v1/api-keys` — `"Missing or empty username header"`:** When Kuadrant AuthPolicies are `Accepted: False`, Envoy bypasses Authorino entirely — requests reach maas-api with no auth headers injected, so `X-MaaS-Username` is always missing. The fix is ALWAYS the Kuadrant operator restart — do NOT debug TLS, kubernetesTokenReview audiences, or patch the AuthPolicy directly:
   ```bash
   # Confirm AuthPolicies are Accepted: False:
