@@ -1,0 +1,41 @@
+# MCP Gateway Operator, Technology Preview — a DIFFERENT OLM package than
+# rhcl-operator despite the similar name (see gitops/operators/connectivity-link),
+# own versioning scheme (0.7.x, unrelated to RHCL's 1.4.x). Provides the
+# mcpgatewayextensions.mcp.kuadrant.io / mcpserverregistrations.mcp.kuadrant.io
+# CRDs the gitops/instance/mcp-gateway chart depends on. A cluster with only
+# rhcl-operator installed has neither CRD: `helm template | oc apply` fails
+# with "no matches for kind MCPGatewayExtension", easy to misread as an RHCL
+# version problem since nothing hints a second operator is required.
+#
+# Requires RHCL 1.4.1+ (already installed by Phase 3's connectivity-link
+# chart) — 1.4.0 has known auth-failure/memory-pressure issues upstream.
+#
+# Unlike rhcl-operator (installed into openshift-operators, the cluster's
+# default all-namespaces group), this operator is scoped to its own
+# namespace via an OperatorGroup with targetNamespaces, matching upstream's
+# own install instructions.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-gateway-system
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: mcp-gateway
+  namespace: mcp-gateway-system
+spec:
+  targetNamespaces:
+    - mcp-gateway-system
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: mcp-gateway
+  namespace: mcp-gateway-system
+spec:
+  channel: preview
+  installPlanApproval: Automatic
+  name: mcp-gateway
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace

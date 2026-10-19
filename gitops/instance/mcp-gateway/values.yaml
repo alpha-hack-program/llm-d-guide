@@ -1,0 +1,101 @@
+# Shared RHCL (Kuadrant) MCP Gateway — see README.md for prerequisites,
+# quick start, the default-tenant-vs-extraTenants model, the OIDC
+# authentication-vs-authorization split, and known gotchas.
+# Full walkthrough: docs/phases/08-mcp-gateway.md.
+
+gateway:
+  name: mcp-gateway
+  namespace: openshift-ingress
+  # OpenShift's own built-in Gateway API controller, not RHCL-specific.
+  className: mcp-gateway-class
+  controllerName: openshift.io/gateway-controller/v1
+  # Shared by every tenant's listener pair — see README.md. Never give a
+  # tenant a different port.
+  port: 8080
+  # Default tenant's external hostname, e.g. mcp.apps.<cluster-domain>.
+  # REQUIRED — the chart fails fast via Helm's `required` if left empty.
+  publicHost: ""
+  # Must include extension.namespace and every
+  # extraTenants[].extensionNamespace.
+  allowedNamespaces:
+    - openshift-ingress
+    - mcp-gateway-system
+
+extension:
+  name: mcp-gateway-ext
+  namespace: mcp-gateway-system
+
+oidc:
+  # Default tenant's OIDC issuer URL, e.g. https://<idp-host>/realms/<realm>.
+  # This field IS the on/off switch for OIDC enforcement on the default
+  # tenant — empty disables it, set enables it. No separate enable flag;
+  # see README.md for why. See README.md's OIDC section for what's
+  # provider-agnostic here (authentication) vs. not (authorization,
+  # configured below).
+  issuer: ""
+
+auth:
+  # Namespace/Service Kuadrant's own generated EnvoyFilter targets for the
+  # Authorino gRPC check, but omits TLS for — see templates/envoyfilter.yaml.
+  authorinoNamespace: kuadrant-system
+  authorinoService: authorino-authorino-authorization
+  # Raw CEL for the authz AuthPolicy's two authorization rules. Defaults to
+  # Keycloak's resource_access claim shape; override to adapt to a
+  # different OIDC provider's claim shape — see README.md's OIDC section
+  # for the full explanation, available CEL variables, and a worked
+  # non-Keycloak example.
+  toolAccessPredicate: |-
+    ('tool:' + request.headers['x-mcp-toolname']) in
+    (has(auth.identity.resource_access) &&
+     auth.identity.resource_access.exists(p, p == request.headers['x-mcp-servername'])
+     ? auth.identity.resource_access[request.headers['x-mcp-servername']].roles : [])
+  promptAccessPredicate: |-
+    ('prompt:' + request.headers['x-mcp-promptname']) in
+    (has(auth.identity.resource_access) &&
+     auth.identity.resource_access.exists(p, p == request.headers['x-mcp-servername'])
+     ? auth.identity.resource_access[request.headers['x-mcp-servername']].roles : [])
+  # RFC 8693 token exchange (defense-in-depth, Tech Preview path, Keycloak-
+  # specific — not independently verified end-to-end; check Authorino's
+  # logs on the first real request before trusting it silently). Requires,
+  # on the Keycloak side (not created by this chart):
+  #   - clientId.attributes["standard.token.exchange.enabled"] = "true" on
+  #     the exchanging client
+  #   - an oidc-audience-mapper on the CLI client including the exchanging
+  #     client (Keycloak V2 Standard Token Exchange requires this)
+  #   - a Secret named credentialSecretName, in the namespace where
+  #     Connectivity Link/Authorino itself is deployed (kuadrant-system),
+  #     NOT extension.namespace and NOT gateway.namespace — Authorino only
+  #     resolves sharedSecretRef against its own namespace.
+  tokenExchange:
+    enabled: false
+    cacheTtlSeconds: 300
+    credentialSecretName: ""
+    credentialSecretKey: ""
+
+# Additional, fully isolated tenants beyond the default above — see
+# README.md for the full model. Each entry requires `name` and
+# `publicHost` (Helm `required`); everything else (`enabled`,
+# `extensionNamespace`, `oidcIssuer`, `auth.*`) is optional and defaults
+# the same way the top-level fields above do.
+#
+# NEVER use `--set` for anything under extraTenants — Helm replaces the
+# whole list item, silently dropping even `name`. Always render from a
+# values file, and list every extra tenant you want kept.
+extraTenants: []
+# - name: owl
+#   enabled: true
+#   publicHost: owl-mcp.apps.<cluster-domain>
+#   extensionNamespace: mcp-gateway-system
+#   oidcIssuer: https://<idp-host>/realms/owl
+#   auth:
+#     tokenExchange:
+#       enabled: false
+# # A tenant on a non-Keycloak OIDC provider — see README.md's OIDC section.
+# - name: contoso
+#   publicHost: contoso-mcp.apps.<cluster-domain>
+#   oidcIssuer: https://login.contoso-idp.example.com/v2
+#   auth:
+#     toolAccessPredicate: |-
+#       ('tool:' + request.headers['x-mcp-toolname']) in auth.identity.groups
+#     promptAccessPredicate: |-
+#       ('prompt:' + request.headers['x-mcp-promptname']) in auth.identity.groups

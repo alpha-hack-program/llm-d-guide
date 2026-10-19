@@ -1,0 +1,77 @@
+══════════════════════════════════════════════════════════════
+  Phase 8 — MCP Gateway
+══════════════════════════════════════════════════════════════
+
+Goal:     Deploy a shared RHCL (Kuadrant) MCP Gateway with a default
+          tenant, verify it end-to-end, then add further isolated
+          tenants (own realm, own hostname, own auth policy) on the
+          same Gateway.
+Time:     ~15-20 min for the default tenant, ~5 min per extra tenant
+
+Requires: Phase 3 complete (Connectivity Link / RHCL 1.4.1+ installed)
+Optional: standalone from RHOAI/llm-d/MaaS — only needed for
+          gateway-routed MCP tool access.
+
+Architecture:
+  - ONE Gateway object (mcp-gateway, openshift-ingress), shared by
+    every tenant.
+  - DEFAULT tenant (gateway.publicHost/oidc.issuer/auth.*, plain
+    scalars) always exists, object names match the original
+    single-tenant chart exactly (mcp-gateway-authn/-authz/-ext) —
+    deliberate, for stability and parity with upstream's docs.
+  - No separate auth.enabled boolean, anywhere — OIDC enforcement is
+    derived purely from whether an issuer is set (empty = disabled,
+    set = enabled). OIDC is opt-in for the default tenant: empty
+    oidc.issuer by default, never assumed.
+  - oidc.issuer is genuinely provider-agnostic for AUTHENTICATION only.
+    AUTHORIZATION defaults to Keycloak's resource_access.<server>.roles
+    claim shape (confirmed same in Kuadrant's own upstream MCP Gateway
+    docs, no documented IdP-agnostic alternative) but IS overridable per
+    tenant: auth.toolAccessPredicate/promptAccessPredicate (default
+    tenant) and extraTenants[].auth.toolAccessPredicate/
+    promptAccessPredicate (per extra tenant) are raw CEL strings,
+    defaulted to the Keycloak shape, swappable for any other provider's
+    claim shape with no template edits. Verified live: a tenant
+    overriding both to a flat `groups` claim renders correctly alongside
+    other tenants still using the Keycloak default.
+  - Each extraTenants[] entry gets its OWN: a listener (<tenant>-mcp,
+    external), Route, and MCPGatewayExtension always; PLUS a second
+    listener (<tenant>-mcps, internal authn+authz) and AuthPolicy
+    pair if oidcIssuer is set. Required fields per entry: name,
+    publicHost (Helm `required`); oidcIssuer is optional.
+  - Adding an extraTenants entry and re-applying only appends new
+    objects; it never edits the default tenant's or another extra
+    tenant's listeners/Route/extension/AuthPolicy.
+  - A tenant's actual MCP servers (HTTPRoutes/MCPServerRegistrations)
+    are NOT created by this chart — owned by whichever project
+    registers servers against sectionName <tenant>-mcps.
+
+Order matters:
+  1. Install the MCP Gateway Operator
+     ⚠ SEPARATE OLM package from rhcl-operator (Phase 3) — a cluster
+       with only RHCL has no MCPGatewayExtension CRD at all
+  2. Deploy the default tenant via the chart
+     ⚠ --set IS safe here (gateway.publicHost/oidc.issuer are
+       plain scalars, not a list) — unlike Step 4
+     ⚠ OIDC is OFF by default — must explicitly ask the user and set
+       oidc.issuer to turn it on (that alone is the switch)
+  3. Confirm the <gateway-name>-istio private-host alias applied
+     ⚠ Without it: tool discovery works, every tool INVOCATION fails
+       with a DNS lookup error (Tech Preview operator bug on OpenShift)
+  4. Add further tenants (e.g. "owl") via extraTenants in a values file
+     ⚠ NEVER use --set for extraTenants[] fields — confirmed live, it
+       silently drops `name`, producing mangled objects
+       (mcp-gateway-authn-, sectionName -mcp) with no error. Always
+       use -f <file>.yaml, and list every extra tenant you want kept.
+  5. Smoke test: authenticated tools/list succeeds, unauthenticated
+     request gets 401 + discovery header; cross-tenant token reuse
+     is rejected
+
+Human gate:
+  - Gateway Programmed: True, Route resolves (no 503), both
+    AuthPolicy objects Enforced: True
+  - Authenticated tools/list returns 200; no-token request returns 401
+  - Each added tenant: own smoke test + cross-tenant isolation check
+
+Guide: docs/phases/08-mcp-gateway.md
+══════════════════════════════════════════════════════════════

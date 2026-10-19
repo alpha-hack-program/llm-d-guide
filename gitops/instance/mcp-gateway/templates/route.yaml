@@ -1,0 +1,58 @@
+# Without this Route nothing outside the Gateway API data plane can reach
+# gateway.publicHost: the ClusterIP override in configmap-override.yaml
+# deliberately keeps the gateway Service off a LoadBalancer, so the only way
+# in is the OpenShift router. A hostname with no matching Route otherwise
+# lands on haproxy with no backend and gets a bare HTTP/1.0 503 — easy to
+# misread as the Gateway/HTTPRoute being broken when both are in fact Ready
+# with routes attached.
+#
+# targetPort is a listener name, not a number: every tenant's pair of
+# listeners shares gateway.port, so only the name disambiguates one
+# tenant's external entry point from another's (and from each tenant's own
+# internal "-mcps"/"mcps" listener).
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Values.gateway.name }}
+  namespace: {{ .Values.gateway.namespace }}
+  labels:
+    app.kubernetes.io/part-of: mcp-gateway
+spec:
+  host: {{ required "gateway.publicHost is required, e.g. mcp.apps.<cluster-domain>" .Values.gateway.publicHost | quote }}
+  port:
+    targetPort: mcp
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: {{ .Values.gateway.name }}-{{ .Values.gateway.className }}
+    weight: 100
+  wildcardPolicy: None
+{{- $root := . }}
+{{- range $t := .Values.extraTenants }}
+{{- $tenant := include "mcp-gateway.extraTenant" (dict "tenant" $t "root" $root) | fromYaml }}
+{{- if $tenant.enabled }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $root.Values.gateway.name }}-{{ $tenant.name }}
+  namespace: {{ $root.Values.gateway.namespace }}
+  labels:
+    app.kubernetes.io/part-of: mcp-gateway
+    mcp-gateway/tenant: {{ $tenant.name }}
+spec:
+  host: {{ required (printf "extraTenants[%s].publicHost is required, e.g. mcp.apps.<cluster-domain>" $tenant.name) $tenant.publicHost | quote }}
+  port:
+    targetPort: {{ $tenant.name }}-mcp
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  to:
+    kind: Service
+    name: {{ $root.Values.gateway.name }}-{{ $root.Values.gateway.className }}
+    weight: 100
+  wildcardPolicy: None
+{{- end }}
+{{- end }}

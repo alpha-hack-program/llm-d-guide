@@ -1,0 +1,52 @@
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPGatewayExtension
+metadata:
+  name: {{ .Values.extension.name }}
+  namespace: {{ .Values.extension.namespace }}
+  labels:
+    app.kubernetes.io/part-of: mcp-gateway
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ .Values.gateway.name }}
+    namespace: {{ .Values.gateway.namespace }}
+    sectionName: mcp
+  publicHost: {{ required "gateway.publicHost is required, e.g. mcp.apps.<cluster-domain>" .Values.gateway.publicHost | quote }}
+  {{- if .Values.oidc.issuer }}
+  # bearerMethodsSupported/scopesSupported, privateHost,
+  # backendPingIntervalSeconds and urlElicitation are all defaulted by the
+  # MCPGatewayExtension CRD itself once created — none of them need to be
+  # set here.
+  oauthProtectedResource:
+    authorizationServers:
+      - {{ .Values.oidc.issuer | quote }}
+  {{- end }}
+{{- $root := . }}
+{{- range $t := .Values.extraTenants }}
+{{- $tenant := include "mcp-gateway.extraTenant" (dict "tenant" $t "root" $root) | fromYaml }}
+{{- if $tenant.enabled }}
+---
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPGatewayExtension
+metadata:
+  name: {{ $root.Values.gateway.name }}-ext-{{ $tenant.name }}
+  namespace: {{ $tenant.extensionNamespace }}
+  labels:
+    app.kubernetes.io/part-of: mcp-gateway
+    mcp-gateway/tenant: {{ $tenant.name }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ $root.Values.gateway.name }}
+    namespace: {{ $root.Values.gateway.namespace }}
+    sectionName: {{ $tenant.name }}-mcp
+  publicHost: {{ required (printf "extraTenants[%s].publicHost is required, e.g. mcp.apps.<cluster-domain>" $tenant.name) $tenant.publicHost | quote }}
+  {{- if $tenant.oidcIssuer }}
+  oauthProtectedResource:
+    authorizationServers:
+      - {{ $tenant.oidcIssuer | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}

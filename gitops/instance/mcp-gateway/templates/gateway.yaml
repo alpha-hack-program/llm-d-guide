@@ -1,0 +1,47 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.gateway.name }}
+  namespace: {{ .Values.gateway.namespace }}
+  labels:
+    app.kubernetes.io/part-of: mcp-gateway
+spec:
+  gatewayClassName: {{ .Values.gateway.className }}
+  infrastructure:
+    parametersRef:
+      group: ""
+      kind: ConfigMap
+      name: {{ .Values.gateway.name }}-override-config
+  listeners:
+    - name: mcp
+      hostname: {{ required "gateway.publicHost is required, e.g. mcp.apps.<cluster-domain>" .Values.gateway.publicHost | quote }}
+      port: {{ .Values.gateway.port }}
+      protocol: HTTP
+      allowedRoutes:
+        {{- include "mcp-gateway.allowedRoutes" . | nindent 8 }}
+    {{- if .Values.oidc.issuer }}
+    - name: mcps
+      port: {{ .Values.gateway.port }}
+      protocol: HTTP
+      allowedRoutes:
+        {{- include "mcp-gateway.allowedRoutes" . | nindent 8 }}
+    {{- end }}
+    {{- $root := . }}
+    {{- range $t := .Values.extraTenants }}
+    {{- $tenant := include "mcp-gateway.extraTenant" (dict "tenant" $t "root" $root) | fromYaml }}
+    {{- if $tenant.enabled }}
+    - name: {{ $tenant.name }}-mcp
+      hostname: {{ required (printf "extraTenants[%s].publicHost is required, e.g. mcp.apps.<cluster-domain>" $tenant.name) $tenant.publicHost | quote }}
+      port: {{ $root.Values.gateway.port }}
+      protocol: HTTP
+      allowedRoutes:
+        {{- include "mcp-gateway.allowedRoutes" $root | nindent 8 }}
+    {{- if $tenant.oidcIssuer }}
+    - name: {{ $tenant.name }}-mcps
+      port: {{ $root.Values.gateway.port }}
+      protocol: HTTP
+      allowedRoutes:
+        {{- include "mcp-gateway.allowedRoutes" $root | nindent 8 }}
+    {{- end }}
+    {{- end }}
+    {{- end }}

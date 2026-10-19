@@ -1,0 +1,50 @@
+# OLMv1 (OCP 4.21+) — use this instead of operator.yaml.
+# [VERIFY] not exercised against a live cluster: Red Hat's own install guide
+# for this operator documents OLMv0 only. Connectivity Link / RHCL is
+# already known to have an `olm.package.required` dependency unsupported by
+# OLMv1 (see gitops/operators/connectivity-link) — this Tech Preview
+# operator's own dependency on rhcl-operator may hit the same limitation.
+# Confirm against a real OLMv1 cluster before relying on this path; fall
+# back to operator.yaml (OLMv0) if the ClusterExtension fails to resolve.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-gateway-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-gateway-installer
+  namespace: mcp-gateway-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mcp-gateway-installer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: mcp-gateway-installer
+  namespace: mcp-gateway-system
+---
+apiVersion: olm.operatorframework.io/v1
+kind: ClusterExtension
+metadata:
+  name: mcp-gateway
+spec:
+  namespace: mcp-gateway-system
+  serviceAccount:
+    name: mcp-gateway-installer
+  source:
+    sourceType: Catalog
+    catalog:
+      packageName: mcp-gateway
+      channels:
+      - preview
+  install:
+    preflight:
+      crdUpgradeSafety:
+        enforcement: Strict

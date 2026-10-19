@@ -1,0 +1,286 @@
+{{/*
+Two-listener auth pattern (RHCL 1.4):
+
+1. AUTHN AuthPolicy → targets Gateway sectionName: mcp (or <tenant>-mcp)
+   - Validates JWT on external traffic
+   - Skips /.well-known paths (OAuth discovery)
+   - Returns 401 with resource_metadata pointer on failure
+
+2. AUTHZ AuthPolicy → targets Gateway sectionName: mcps (or <tenant>-mcps)
+   - Validates JWT again (each listener needs its own authn)
+   - CEL authorization checks x-mcp-toolname / x-mcp-promptname headers
+     (set by ext_proc DURING body processing — only visible on the -mcps
+     listener because per-server routes land here AFTER ext_proc routing)
+   - Checks resource_access.<servername>.roles for tool:<name> / prompt:<name>
+   - Returns 403 on insufficient permissions
+
+Per-server HTTPRoutes must reference the matching -mcps sectionName. Both
+listeners in a pair share gateway.port so ext_proc's route-cache-clear +
+:authority change can reach the -mcps routes.
+
+`resource_access` is Keycloak's own JWT claim shape for per-client roles,
+not a generic OIDC claim — confirmed against Kuadrant's own upstream docs
+(docs.kuadrant.io/dev/mcp-gateway, github.com/Kuadrant/mcp-gateway's
+authorization.md): every one of their worked authz examples hardcodes this
+same claim, with no documented adaptation for other providers. Pointing
+`oidc.issuer`/`oidcIssuer` at a non-Keycloak OIDC provider makes
+authentication (this file's AUTHN half, and the issuer field itself) work
+fine; authorization below silently fails closed (every check evaluates to
+false, not an error) unless that provider is configured to emit a matching
+`resource_access` claim, or these CEL expressions are rewritten to match
+whatever claim shape it actually produces. See values.yaml's comment on
+oidc.issuer for the full citation.
+
+The default tenant's pair (mcp-gateway-authn / mcp-gateway-authz) matches
+the original single-tenant chart's object names exactly. Each extra
+tenant's pair is independently named and trusts only that tenant's own
+oidcIssuer — adding or changing one tenant never touches another's
+AuthPolicy, default included.
+*/}}
+{{- if .Values.oidc.issuer }}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: {{ .Values.gateway.name }}-authn
+  namespace: {{ .Values.gateway.namespace }}
+  labels:
+    app.kubernetes.io/part-of: mcp-gateway
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ .Values.gateway.name }}
+    sectionName: mcp
+  defaults:
+    when:
+      - predicate: "!request.path.contains('/.well-known')"
+    rules:
+      authentication:
+        keycloak:
+          jwt:
+            issuerUrl: {{ .Values.oidc.issuer | quote }}
+      response:
+        unauthenticated:
+          code: 401
+          headers:
+            "WWW-Authenticate":
+              value: "Bearer resource_metadata=https://{{ .Values.gateway.publicHost }}/.well-known/oauth-protected-resource"
+          body:
+            value: |
+              {"error": "Unauthorized", "message": "Authentication required."}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: {{ .Values.gateway.name }}-authz
+  namespace: {{ .Values.gateway.namespace }}
+  labels:
+    app.kubernetes.io/part-of: mcp-gateway
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ .Values.gateway.name }}
+    sectionName: mcps
+  rules:
+    authentication:
+      sso-server:
+        jwt:
+          issuerUrl: {{ .Values.oidc.issuer | quote }}
+    {{- if .Values.auth.tokenExchange.enabled }}
+    {{- $tex := .Values.auth.tokenExchange }}
+    metadata:
+      # RFC 8693 token exchange (defense-in-depth). x-mcp-servername
+      # ("<namespace>/<name>") already matches this tenant's Keycloak
+      # client IDs, so no separate client-naming convention is needed.
+      oauth-token-exchange:
+        when:
+          - predicate: "request.headers.exists(h, h == 'x-mcp-servername')"
+        cache:
+          key:
+            expression: "auth.identity.sub + ':' + request.headers['x-mcp-servername']"
+          ttl: {{ $tex.cacheTtlSeconds }}
+        http:
+          url: "{{ $.Values.oidc.issuer }}/protocol/openid-connect/token"
+          method: POST
+          credentials:
+            authorizationHeader:
+              prefix: Basic
+          sharedSecretRef:
+            name: {{ $tex.credentialSecretName }}
+            key: {{ $tex.credentialSecretKey }}
+          bodyParameters:
+            grant_type:
+              value: urn:ietf:params:oauth:grant-type:token-exchange
+            subject_token:
+              expression: "request.headers['authorization'].split('Bearer ')[1]"
+            subject_token_type:
+              value: urn:ietf:params:oauth:token-type:access_token
+            audience:
+              expression: "request.headers['x-mcp-servername']"
+    {{- end }}
+    authorization:
+      tool-access-check:
+        when:
+          - predicate: "request.headers.exists(h, h == 'x-mcp-toolname')"
+        patternMatching:
+          patterns:
+            - predicate: |
+                {{- .Values.auth.toolAccessPredicate | nindent 16 }}
+      prompt-access-check:
+        when:
+          - predicate: "request.headers.exists(h, h == 'x-mcp-promptname')"
+        patternMatching:
+          patterns:
+            - predicate: |
+                {{- .Values.auth.promptAccessPredicate | nindent 16 }}
+    response:
+      {{- if .Values.auth.tokenExchange.enabled }}
+      success:
+        headers:
+          authorization:
+            plain:
+              expression: >-
+                ('oauth-token-exchange' in auth.metadata &&
+                 'access_token' in auth.metadata['oauth-token-exchange'])
+                  ? 'Bearer ' + auth.metadata['oauth-token-exchange'].access_token
+                  : request.headers['authorization']
+      {{- end }}
+      unauthenticated:
+        headers:
+          "WWW-Authenticate":
+            value: "Bearer"
+        body:
+          value: |
+            {"error": "Unauthorized", "message": "MCP Access denied: Authentication required."}
+      unauthorized:
+        body:
+          value: |
+            {"error": "Forbidden", "message": "MCP Access denied: Insufficient permissions."}
+{{- end }}
+{{- $root := . }}
+{{- range $t := .Values.extraTenants }}
+{{- $tenant := include "mcp-gateway.extraTenant" (dict "tenant" $t "root" $root) | fromYaml }}
+{{- if and $tenant.enabled $tenant.oidcIssuer }}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: {{ $root.Values.gateway.name }}-authn-{{ $tenant.name }}
+  namespace: {{ $root.Values.gateway.namespace }}
+  labels:
+    app.kubernetes.io/part-of: mcp-gateway
+    mcp-gateway/tenant: {{ $tenant.name }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ $root.Values.gateway.name }}
+    sectionName: {{ $tenant.name }}-mcp
+  defaults:
+    when:
+      - predicate: "!request.path.contains('/.well-known')"
+    rules:
+      authentication:
+        keycloak:
+          jwt:
+            issuerUrl: {{ $tenant.oidcIssuer | quote }}
+      response:
+        unauthenticated:
+          code: 401
+          headers:
+            "WWW-Authenticate":
+              value: "Bearer resource_metadata=https://{{ $tenant.publicHost }}/.well-known/oauth-protected-resource"
+          body:
+            value: |
+              {"error": "Unauthorized", "message": "Authentication required."}
+---
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: {{ $root.Values.gateway.name }}-authz-{{ $tenant.name }}
+  namespace: {{ $root.Values.gateway.namespace }}
+  labels:
+    app.kubernetes.io/part-of: mcp-gateway
+    mcp-gateway/tenant: {{ $tenant.name }}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {{ $root.Values.gateway.name }}
+    sectionName: {{ $tenant.name }}-mcps
+  rules:
+    authentication:
+      sso-server:
+        jwt:
+          issuerUrl: {{ $tenant.oidcIssuer | quote }}
+    {{- if $tenant.auth.tokenExchange.enabled }}
+    {{- $tex := $tenant.auth.tokenExchange }}
+    metadata:
+      oauth-token-exchange:
+        when:
+          - predicate: "request.headers.exists(h, h == 'x-mcp-servername')"
+        cache:
+          key:
+            expression: "auth.identity.sub + ':' + request.headers['x-mcp-servername']"
+          ttl: {{ $tex.cacheTtlSeconds }}
+        http:
+          url: "{{ $tenant.oidcIssuer }}/protocol/openid-connect/token"
+          method: POST
+          credentials:
+            authorizationHeader:
+              prefix: Basic
+          sharedSecretRef:
+            name: {{ $tex.credentialSecretName }}
+            key: {{ $tex.credentialSecretKey }}
+          bodyParameters:
+            grant_type:
+              value: urn:ietf:params:oauth:grant-type:token-exchange
+            subject_token:
+              expression: "request.headers['authorization'].split('Bearer ')[1]"
+            subject_token_type:
+              value: urn:ietf:params:oauth:token-type:access_token
+            audience:
+              expression: "request.headers['x-mcp-servername']"
+    {{- end }}
+    authorization:
+      tool-access-check:
+        when:
+          - predicate: "request.headers.exists(h, h == 'x-mcp-toolname')"
+        patternMatching:
+          patterns:
+            - predicate: |
+                {{- $tenant.auth.toolAccessPredicate | nindent 16 }}
+      prompt-access-check:
+        when:
+          - predicate: "request.headers.exists(h, h == 'x-mcp-promptname')"
+        patternMatching:
+          patterns:
+            - predicate: |
+                {{- $tenant.auth.promptAccessPredicate | nindent 16 }}
+    response:
+      {{- if $tenant.auth.tokenExchange.enabled }}
+      success:
+        headers:
+          authorization:
+            plain:
+              expression: >-
+                ('oauth-token-exchange' in auth.metadata &&
+                 'access_token' in auth.metadata['oauth-token-exchange'])
+                  ? 'Bearer ' + auth.metadata['oauth-token-exchange'].access_token
+                  : request.headers['authorization']
+      {{- end }}
+      unauthenticated:
+        headers:
+          "WWW-Authenticate":
+            value: "Bearer"
+        body:
+          value: |
+            {"error": "Unauthorized", "message": "MCP Access denied: Authentication required."}
+      unauthorized:
+        body:
+          value: |
+            {"error": "Forbidden", "message": "MCP Access denied: Insufficient permissions."}
+{{- end }}
+{{- end }}
