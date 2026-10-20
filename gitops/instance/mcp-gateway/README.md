@@ -184,6 +184,91 @@ Available at CEL evaluation time: `auth.identity` (the decoded token claims) and
 gateway's `ext_proc` sets — `request.headers['x-mcp-servername']`,
 `request.headers['x-mcp-toolname']`, `request.headers['x-mcp-promptname']`.
 
+## Filtering `tools/list`/`discover_tools` by authorization
+
+`auth.toolAccessPredicate`/`promptAccessPredicate` (and their `extraTenants[]` equivalents) gate
+`tools/call`/`prompts/call` — they do **not** affect what `tools/list` or the broker's own
+`discover_tools` meta-tool show. Confirmed live: with only those predicates configured, every
+authenticated caller sees the full tool catalog of every registered server regardless of role; the
+per-tool CEL check only runs once a call is actually attempted. `ext_proc` never routes a `tools/list`
+request to the `-mcps` listener at all — there's no tool name or server name in that request for the
+CEL to check against.
+
+Filtering discovery itself needs a second, independent mechanism: a signed `x-mcp-authorized` header,
+computed on the `mcp` listener (the authn-only one `tools/list` actually lands on) and verified by the
+broker via `MCPGatewayExtension.spec.trustedHeadersKey`. This is RHCL's own documented mechanism
+(install guide §6.3, "Filter revoked tools and prompts from display"; also assumed by `MCPVirtualServer`
+curation, which filters on top of whatever this header already allows). Off by default — enable per
+tenant with `auth.filterToolList.enabled: true` (and the `extraTenants[].auth.filterToolList`
+equivalent).
+
+This chart does not generate the signing keypair — Helm has no function to derive an EC public key
+from a private key, and the two halves must live in different namespaces (below). Create them once per
+tenant, **exactly like this** — every deviation below was tried live and failed with a different,
+unhelpful error:
+
+```bash
+# Plain SEC1 output of ecparam, NOT converted to PKCS8 — Authorino's wristband
+# signer rejects a PKCS8-wrapped EC key with "Invalid signing key algorithm"
+# even though the key itself is valid. No official doc mentions this; found
+# by trial.
+openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem
+openssl ec -in private-key.pem -pubout -out public-key.pem
+
+# Private half: data key MUST be named "key.pem" (confirmed from the AuthConfig
+# CRD's own field description) — "key" decodes to the wrong field and fails
+# with "failed to decode PEM file", which reads like a format problem but is
+# actually just a wrong field name. Lives in auth.authorinoNamespace
+# (kuadrant-system) — Authorino only resolves signingKeyRefs against its own
+# namespace, same restriction as auth.tokenExchange.credentialSecretName.
+# SHARED across every tenant on this Gateway, so the secret name must be
+# unique per tenant.
+oc create secret generic <privateKeySecretName> \
+  --from-file=key.pem=private-key.pem -n kuadrant-system
+
+# Public half: data key MUST be named "key" (per MCPGatewayExtension's own
+# TrustedHeadersKey field description — the opposite convention from the
+# private half above). Lives in the tenant's own extension namespace
+# (already isolated, so the name can be reused across tenants).
+oc create secret generic <publicKeySecretName> \
+  --from-file=key=public-key.pem -n <extension-namespace>
+
+rm -f private-key.pem public-key.pem
+```
+
+Then set, per tenant:
+
+```yaml
+auth:
+  filterToolList:
+    enabled: true
+    privateKeySecretName: mcp-gateway-trusted-headers-private-key   # unique across every tenant
+    publicKeySecretName: mcp-gateway-trusted-headers-public-key     # namespace already isolates this
+```
+
+After applying, the broker (`MCPGatewayExtension`'s deployment) needs to restart once to pick up
+`TRUSTED_HEADER_PUBLIC_KEY` — if `oc rollout status` doesn't show a fresh generation on its own,
+`oc rollout restart deployment/<gateway-name> -n <tenant-extension-namespace>`.
+
+**The OPA rule needs `allValues: true`, not just `rego`.** Without it, Authorino evaluates the policy
+and the request succeeds, but `auth.authorization.authorized-capabilities.capabilities` — the variable
+the response's wristband selector reads — is never exposed outside the `allow` boolean, so the signed
+header ends up carrying an empty string. The broker then logs `failed to parse x-mcp-authorized header:
+failed to unmarshal allowed-capabilities JSON: unexpected end of JSON input` and — because the broker
+fails closed on a malformed trusted header rather than falling back to unfiltered — **every** caller
+sees an empty tool list, not the unfiltered list. This chart's `authpolicy.yaml` template sets
+`allValues: true`; if copying this pattern elsewhere, don't drop it.
+
+`auth.filterToolList.capabilitiesRego` is overridable per tenant for the same reason
+`toolAccessPredicate`/`promptAccessPredicate` are — the default assumes Keycloak's `resource_access`
+shape with `tool:`/`prompt:`-prefixed roles; a different provider needs different Rego, written against
+`input.auth...` (Authorino's OPA integration passes the whole AuthJSON as `input`, unlike the CEL
+predicates above which see `auth` directly).
+
+Verified live on sandbox341 against both the default tenant (Keycloak users `alice`/`bob`, `openshell`
+realm) and the `owl` extra tenant: each user's `discover_tools` response now lists only the servers and
+tools their own `resource_access` roles actually grant, matching what `tools/call` already enforced.
+
 ## No separate `auth.enabled` boolean, by design
 
 OIDC enforcement is derived purely from whether an issuer is non-empty — not a separate flag. An
@@ -206,6 +291,9 @@ One field, one meaning: empty = disabled, set = enabled, nothing to forget to pa
 | `auth.authorinoNamespace` / `.authorinoService` | `kuadrant-system` / `authorino-authorino-authorization` | | Where Kuadrant's own generated `EnvoyFilter` reaches Authorino's gRPC check (it omits TLS by default; this chart patches that in). |
 | `auth.toolAccessPredicate` / `.promptAccessPredicate` | Keycloak `resource_access` CEL | | Default tenant's authz CEL — see OIDC section above. |
 | `auth.tokenExchange.*` | disabled | | RFC 8693 token exchange, Keycloak-specific, Tech Preview path — see inline `values.yaml` comment for the Keycloak-side setup it requires. |
+| `auth.filterToolList.enabled` | `false` | | Filters `tools/list`/`discover_tools` by the caller's own authorization instead of showing every registered tool — see "Filtering `tools/list` by authorization" above. |
+| `auth.filterToolList.privateKeySecretName` / `.publicKeySecretName` | `""` / `""` | **yes, if `filterToolList.enabled`** | Pre-existing ECDSA keypair secrets this chart does not generate — see above for the exact `openssl`/`oc create secret` recipe and the namespaces each half must live in. |
+| `auth.filterToolList.capabilitiesRego` | Keycloak `resource_access` Rego | | Default tenant's capability-computation Rego — override together with `toolAccessPredicate`/`promptAccessPredicate` for a non-Keycloak provider. |
 | `extraTenants` | `[]` | | See "The default tenant vs. `extraTenants`" above. Each entry: `name`/`publicHost`/`extensionNamespace` required, `oidcIssuer` optional, `port` required only if `oidcIssuer` is set (see "Per-tenant ports"), `enabled`/`auth.*` default the same way the top-level fields do. |
 
 ## Known gotchas

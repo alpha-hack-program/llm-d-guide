@@ -44,7 +44,7 @@ fields) — see gateway.yaml/mcpgatewayextension.yaml/referencegrant.yaml's
 tenant's own extension namespace) would guarantee a collision, since the
 MCP Gateway Operator allows only one MCPGatewayExtension per namespace.
 */}}
-{{- $defaults := dict "enabled" true "extensionNamespace" "" "oidcIssuer" "" "port" "" "auth" (dict "toolAccessPredicate" .root.Values.auth.toolAccessPredicate "promptAccessPredicate" .root.Values.auth.promptAccessPredicate "tokenExchange" (dict "enabled" false "cacheTtlSeconds" 300 "credentialSecretName" "" "credentialSecretKey" "")) -}}
+{{- $defaults := dict "enabled" true "extensionNamespace" "" "oidcIssuer" "" "port" "" "auth" (dict "toolAccessPredicate" .root.Values.auth.toolAccessPredicate "promptAccessPredicate" .root.Values.auth.promptAccessPredicate "tokenExchange" (dict "enabled" false "cacheTtlSeconds" 300 "credentialSecretName" "" "credentialSecretKey" "") "filterToolList" (dict "enabled" false "privateKeySecretName" "" "publicKeySecretName" "" "capabilitiesRego" .root.Values.auth.filterToolList.capabilitiesRego)) -}}
 {{- mergeOverwrite $defaults .tenant | toYaml -}}
 {{- end -}}
 

@@ -22,6 +22,10 @@ spec:
     authorizationServers:
       - {{ .Values.oidc.issuer | quote }}
   {{- end }}
+  {{- if .Values.auth.filterToolList.enabled }}
+  trustedHeadersKey:
+    secretName: {{ required "auth.filterToolList.publicKeySecretName is required when auth.filterToolList.enabled" .Values.auth.filterToolList.publicKeySecretName | quote }}
+  {{- end }}
 {{- $root := . }}
 {{- range $t := .Values.extraTenants }}
 {{- $tenant := include "mcp-gateway.extraTenant" (dict "tenant" $t "root" $root) | fromYaml }}
@@ -47,6 +51,10 @@ spec:
   oauthProtectedResource:
     authorizationServers:
       - {{ $tenant.oidcIssuer | quote }}
+  {{- end }}
+  {{- if $tenant.auth.filterToolList.enabled }}
+  trustedHeadersKey:
+    secretName: {{ required (printf "extraTenants[%s].auth.filterToolList.publicKeySecretName is required when auth.filterToolList.enabled" $tenant.name) $tenant.auth.filterToolList.publicKeySecretName | quote }}
   {{- end }}
 {{- end }}
 {{- end }}

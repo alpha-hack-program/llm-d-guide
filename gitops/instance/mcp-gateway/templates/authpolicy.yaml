@@ -5,6 +5,11 @@ Two-listener auth pattern (RHCL 1.4):
    - Validates JWT on external traffic
    - Skips /.well-known paths (OAuth discovery)
    - Returns 401 with resource_metadata pointer on failure
+   - With auth.filterToolList.enabled: also computes each caller's allowed
+     tools/prompts via OPA and signs them into a response header, so
+     tools/list and prompts/list return only what the caller can actually
+     use — see that value's own comment for why this lives here and not on
+     the -mcps policy below.
 
 2. AUTHZ AuthPolicy → targets Gateway sectionName: mcps (or <tenant>-mcps)
    - Validates JWT again (each listener needs its own authn)
@@ -60,7 +65,29 @@ spec:
         keycloak:
           jwt:
             issuerUrl: {{ .Values.oidc.issuer | quote }}
+      {{- if .Values.auth.filterToolList.enabled }}
+      authorization:
+        authorized-capabilities:
+          opa:
+            allValues: true
+            rego: |
+              {{- .Values.auth.filterToolList.capabilitiesRego | nindent 14 }}
+      {{- end }}
       response:
+        {{- if .Values.auth.filterToolList.enabled }}
+        success:
+          headers:
+            x-mcp-authorized:
+              wristband:
+                issuer: authorino
+                customClaims:
+                  allowed-capabilities:
+                    selector: auth.authorization.authorized-capabilities.capabilities.@tostr
+                tokenDuration: 300
+                signingKeyRefs:
+                  - name: {{ required "auth.filterToolList.privateKeySecretName is required when auth.filterToolList.enabled" .Values.auth.filterToolList.privateKeySecretName | quote }}
+                    algorithm: ES256
+        {{- end }}
         unauthenticated:
           code: 401
           headers:
@@ -186,7 +213,29 @@ spec:
         keycloak:
           jwt:
             issuerUrl: {{ $tenant.oidcIssuer | quote }}
+      {{- if $tenant.auth.filterToolList.enabled }}
+      authorization:
+        authorized-capabilities:
+          opa:
+            allValues: true
+            rego: |
+              {{- $tenant.auth.filterToolList.capabilitiesRego | nindent 14 }}
+      {{- end }}
       response:
+        {{- if $tenant.auth.filterToolList.enabled }}
+        success:
+          headers:
+            x-mcp-authorized:
+              wristband:
+                issuer: authorino
+                customClaims:
+                  allowed-capabilities:
+                    selector: auth.authorization.authorized-capabilities.capabilities.@tostr
+                tokenDuration: 300
+                signingKeyRefs:
+                  - name: {{ required (printf "extraTenants[%s].auth.filterToolList.privateKeySecretName is required when auth.filterToolList.enabled" $tenant.name) $tenant.auth.filterToolList.privateKeySecretName | quote }}
+                    algorithm: ES256
+        {{- end }}
         unauthenticated:
           code: 401
           headers:

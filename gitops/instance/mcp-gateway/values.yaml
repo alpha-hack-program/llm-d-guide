@@ -73,6 +73,58 @@ auth:
     cacheTtlSeconds: 300
     credentialSecretName: ""
     credentialSecretKey: ""
+  # Signed x-mcp-authorized header so tools/list and prompts/list return
+  # only the capabilities the caller's token actually grants, instead of
+  # every tool on every registered server regardless of role (RHCL docs
+  # Ch. 6.3, "Filter revoked tools and prompts from display"). Off by
+  # default. This is a SEPARATE mechanism from toolAccessPredicate/
+  # promptAccessPredicate above: those gate tools/call and prompts/call on
+  # the -mcps listener; this gates what tools/list and prompts/list show on
+  # the mcp listener, which ext_proc never routes through -mcps for list
+  # calls at all.
+  #
+  # Requires a pre-existing ECDSA P-256 keypair this chart deliberately
+  # does NOT generate (Helm has no sprig function to derive an EC public
+  # key from a private key, and the two halves land in different
+  # namespaces by Authorino's own design — see below). Create it once per
+  # tenant:
+  #   openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem
+  #   openssl ec -in private-key.pem -pubout -out public-key.pem
+  #   oc create secret generic <privateKeySecretName> --from-file=key=private-key.pem -n <auth.authorinoNamespace>
+  #   oc create secret generic <publicKeySecretName> --from-file=key=public-key.pem -n <extension.namespace>
+  # See README.md's "Filtering tools/list by authorization" section for
+  # the full walkthrough.
+  filterToolList:
+    enabled: false
+    # Secret (data key "key") holding the PEM private key, in
+    # auth.authorinoNamespace — Authorino only resolves signingKeyRefs
+    # against its OWN namespace, the same limitation documented for
+    # tokenExchange.credentialSecretName above. That namespace is SHARED
+    # across every tenant on this Gateway, so this name must be unique per
+    # tenant — required (no default) for exactly that reason.
+    privateKeySecretName: ""
+    # Secret (data key "key") holding the matching PEM public key, in this
+    # tenant's own extension.namespace (already isolated per tenant, so no
+    # collision risk) — wired into MCPGatewayExtension.spec.trustedHeadersKey.
+    publicKeySecretName: ""
+    # Raw Rego computing the `capabilities` object the signed header
+    # carries, from the same resource_access/tool:/prompt: shape
+    # toolAccessPredicate assumes above — override together with that
+    # field for a non-Keycloak provider. `input.auth...`, not `auth...`:
+    # Authorino's OPA integration passes the whole AuthJSON as `input`,
+    # unlike the CEL predicates above which see `auth` directly.
+    capabilitiesRego: |-
+      allow = true
+      capabilities = {
+        "tools": { server: tools |
+          server := object.keys(input.auth.identity.resource_access)[_]
+          tools := [substring(r, count("tool:"), -1) | r := input.auth.identity.resource_access[server].roles[_]; startswith(r, "tool:")]
+        },
+        "prompts": { server: prompts |
+          server := object.keys(input.auth.identity.resource_access)[_]
+          prompts := [substring(r, count("prompt:"), -1) | r := input.auth.identity.resource_access[server].roles[_]; startswith(r, "prompt:")]
+        }
+      }
 
 # Additional, fully isolated tenants beyond the default above — see
 # README.md for the full model. Each entry requires `name`, `publicHost`,
@@ -114,6 +166,10 @@ extraTenants: []
 #   auth:
 #     tokenExchange:
 #       enabled: false
+#     filterToolList:
+#       enabled: true
+#       privateKeySecretName: mcp-gateway-trusted-headers-private-key-owl   # unique across every tenant
+#       publicKeySecretName: mcp-gateway-trusted-headers-public-key          # extensionNamespace already isolates this
 # # A tenant on a non-Keycloak OIDC provider — see README.md's OIDC section.
 # - name: contoso
 #   publicHost: contoso-mcp.apps.<cluster-domain>
