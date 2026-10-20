@@ -21,13 +21,14 @@
 10. [MaaS Demo (Optional)](docs/demos/maas-demo.md)
 11. [External Model MaaS Demo (Optional)](docs/demos/external-model-demo.md)
 12. [Full MaaS Reset](docs/demos/maas-reset.md)
-13. [AI-Assisted Installation](#ai-assisted-installation)
-14. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
-15. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
-16. [Appendix C — Reference Links](#appendix-c--reference-links)
-17. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
-18. [Appendix E — Token Rate Limiting](#appendix-e--token-rate-limiting-behaviour-and-observability)
-19. [Appendix F — ArgoCD (Red Hat OpenShift GitOps)](#appendix-f--argocd-red-hat-openshift-gitops)
+13. [MCP Gateway (Optional)](docs/phases/08-mcp-gateway.md)
+14. [AI-Assisted Installation](#ai-assisted-installation)
+15. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
+16. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
+17. [Appendix C — Reference Links](#appendix-c--reference-links)
+18. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
+19. [Appendix E — Token Rate Limiting](#appendix-e--token-rate-limiting-behaviour-and-observability)
+20. [Appendix F — ArgoCD (Red Hat OpenShift GitOps)](#appendix-f--argocd-red-hat-openshift-gitops)
 
 ---
 
@@ -49,8 +50,9 @@ Red Hat OpenShift AI (RHOAI) 3.5 is a self-managed AI/ML platform that provides 
 **Additional Features:**
 
 * Distributed Inference with llm-d — GA in RHOAI 3.5 (disaggregated prefill/decode, Inference Gateway, KV-cache-aware routing). **Requires OCP 4.20 or later.**
-* Model as a Service — MaaS (governed, rate-limited LLM access via AI Gateway and Connectivity Link)
+* Model as a Service — MaaS (governed, rate-limited LLM access via AI Gateway and Connectivity Link). **Multi-tenant supported** — any number of fully isolated tenants, each with its own dedicated `Gateway`, namespace, `maas-api` instance, and RBAC.
 * OGX (OpenAI-compatible RAG APIs and agentic AI, replaces Llama Stack Operator)
+* MCP Gateway (Technology Preview, optional, standalone from RHOAI/llm-d/MaaS) — shared RHCL/Kuadrant gateway giving OIDC-authenticated HTTP access to MCP tool servers. **Multi-tenant supported** — one `Gateway` shared by any number of isolated tenants, each with its own realm, hostname, and auth policy.
 
 **Cross-Cutting Concerns:**
 
@@ -437,6 +439,10 @@ MaaS provides subscription-based governed access to LLMs via `sk-oai-*` API keys
 
 Access control is CRD-based: `MaaSSubscription` defines token rate limits per model per group, and `MaaSAuthPolicy` grants groups access to models. Users can belong to multiple subscriptions. All config lives in the `models-as-a-service` namespace and is fully GitOps-compatible.
 
+**Multi-tenant supported** — beyond the single default tenant covered below, MaaS supports any
+number of additional, fully isolated tenants, each with its own dedicated `Gateway`, namespace,
+`maas-api` instance, and RBAC. See [9.5 Multi-Tenant MaaS](#95-multi-tenant-maas-optional).
+
 ### Architecture overview
 
 ```mermaid
@@ -741,10 +747,21 @@ Wipe all demo state from Sections 10 and 11 and start from a clean slate. See: *
 
 ---
 
+## 13. MCP Gateway (Optional)
+
+A shared RHCL (Kuadrant) MCP Gateway — one `Gateway` object giving external MCP clients (agents,
+IDEs, sandboxes) OIDC-authenticated HTTP access to MCP tool servers. Standalone from RHOAI/llm-d/MaaS.
+**Multi-tenant supported**: any number of fully isolated tenants can share the one `Gateway`, each
+with its own hostname, Keycloak realm, and auth policy — adding a tenant never touches another
+tenant's objects. Technology Preview. See the full walkthrough:
+**[docs/phases/08-mcp-gateway.md](docs/phases/08-mcp-gateway.md)**
+
+---
+
 ## AI-Assisted Installation
 
 For guided installation using Claude Code, Cursor, or compatible AI coding assistants,
-see the [Co-pilot Runbook](AGENTS.md). The runbook breaks installation into 7 phases
+see the [Co-pilot Runbook](AGENTS.md). The runbook breaks installation into 9 phases
 with wait conditions and human gates:
 
 | Phase | Guide | Approx. time |
@@ -756,6 +773,8 @@ with wait conditions and human gates:
 | 4 — Monitoring | [docs/phases/04-monitoring.md](docs/phases/04-monitoring.md) | 10 min |
 | 5 — llm-d Quick Start | [docs/phases/05-llmd-quickstart.md](docs/phases/05-llmd-quickstart.md) | 15–20 min |
 | 6 — MaaS | [docs/phases/06-maas.md](docs/phases/06-maas.md) | 10–15 min |
+| 7 — MaaS Multi-Tenant | [docs/phases/07-maas-multi-tenant.md](docs/phases/07-maas-multi-tenant.md) | 15–20 min |
+| 8 — MCP Gateway (Optional) | [docs/phases/08-mcp-gateway.md](docs/phases/08-mcp-gateway.md) | 15–20 min (+5 min/tenant) |
 
 Reference material:
 - [Validation Commands](docs/reference/validation.md)
