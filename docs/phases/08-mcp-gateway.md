@@ -25,12 +25,15 @@ never exposed to any list-merge behavior. It creates the `mcp`/`mcps` listeners 
 single-tenant deployment.
 
 Every tenant beyond the default is **additive**, via `extraTenants` in values. Each entry requires
-`name` and `publicHost` — the chart fails fast (Helm's `required`) if either is missing —
-and gets, independently:
+`name`, `publicHost`, and `extensionNamespace` — the chart fails fast (Helm's `required`) if any is
+missing — and gets, independently:
 - a `Gateway` listener, `<tenant>-mcp` (external, has a hostname).
 - its own `Route` (OpenShift needs one per public hostname; the Gateway's own Service is
   deliberately `ClusterIP`).
-- its own `MCPGatewayExtension` (own `publicHost`, own trusted OIDC issuer if one is set).
+- its own `MCPGatewayExtension` in its own `extensionNamespace` (own `publicHost`, own trusted OIDC
+  issuer if one is set), plus a matching `ReferenceGrant` entry (created automatically) allowing
+  that namespace to reference the shared `Gateway`. `extensionNamespace` has no default and must be
+  unique across every tenant, default included — see the gotcha on why.
 - if `oidcIssuer` is also set: a second listener `<tenant>-mcps` (internal, post-routing,
   authn+authz, no hostname — RHCL 1.4's two-listener pattern; a JSON-RPC-body-parsing `ext_proc`
   rewrites `:authority` and re-evaluates routing between the two, which is why both listeners in a
@@ -66,7 +69,9 @@ nesting at all:
 extraTenants:
   - name: contoso
     publicHost: contoso-mcp.apps.ocp.example.com
+    extensionNamespace: mcp-gateway-contoso
     oidcIssuer: https://login.contoso-idp.example.com/v2
+    port: 8082
     auth:
       toolAccessPredicate: |-
         ('tool:' + request.headers['x-mcp-toolname']) in auth.identity.groups
@@ -219,10 +224,17 @@ Drop this workaround once the operator derives the private host from the `Gatewa
 
 ### Step 4 — Adding a tenant
 
-Each extra tenant needs two required fields (`name`, `publicHost`); `oidcIssuer` is optional,
-same on/off-switch behavior as the default tenant's `oidc.issuer` — leave it unset for a
-tenant with no gateway-level auth, set it to enable OIDC for that tenant, no separate flag either
-way. **Never use `--set` for anything under `extraTenants`** — confirmed live: `--set
+Each extra tenant needs three required fields: `name`, `publicHost`, and `extensionNamespace`.
+`oidcIssuer` is optional, same on/off-switch behavior as the default tenant's `oidc.issuer` — leave
+it unset for a tenant with no gateway-level auth, set it to enable OIDC for that tenant (and then
+also set `port` — see the gotcha on why), no separate flag either way.
+
+**`extensionNamespace` has no default and must be unique across every tenant, default included** —
+the MCP Gateway Operator allows only one `MCPGatewayExtension` per *namespace* (confirmed live, see
+the gotcha on why `mcp-gateway-system`, the default tenant's own extension namespace, can never be
+reused). A matching `ReferenceGrant` entry is created automatically; nothing to apply by hand.
+
+**Never use `--set` for anything under `extraTenants`** — confirmed live: `--set
 extraTenants[0].x=y` replaces the *entire* list item, not just the field given, silently dropping
 even `name`. The result still applies without error, but produces mangled objects
 (`mcp-gateway-authn-`, `sectionName: -mcp`) that fail in ways that look like a routing problem, not
@@ -234,24 +246,30 @@ always, and `oidc.issuer` too if the default tenant has OIDC enforced:
 # owl-tenant-values.yaml
 gateway:
   publicHost: mcp.apps.ocp.example.com
-keycloak:
+oidc:
   issuer: https://keycloak.apps.ocp.example.com/realms/openshell   # omit this line entirely if the default tenant has no OIDC enforced
 
 extraTenants:
   - name: owl
     publicHost: owl-mcp.apps.ocp.example.com
+    extensionNamespace: mcp-gateway-owl   # must differ from mcp-gateway-system
     oidcIssuer: https://keycloak.apps.ocp.example.com/realms/owl
+    port: 8081   # required because oidcIssuer is set
 ```
 
 ```bash
+oc create namespace mcp-gateway-owl   # the chart doesn't create it — same as mcp-gateway-system wasn't chart-created either
+
 helm template gitops/instance/mcp-gateway --name-template mcp-gateway \
   -f owl-tenant-values.yaml --include-crds | oc apply -f -
 
 # only the NEW tenant's objects appear — nothing default-tenant-named changes
 oc get gateway mcp-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[*].name}'
 oc get route mcp-gateway-owl -n openshift-ingress
-oc get mcpgatewayextension mcp-gateway-ext-owl -n mcp-gateway-system
+oc get mcpgatewayextension mcp-gateway-ext-owl -n mcp-gateway-owl
 oc get authpolicy mcp-gateway-authn-owl mcp-gateway-authz-owl -n openshift-ingress
+oc get referencegrant allow-mcp-gateway-ext -n openshift-ingress -o jsonpath='{.spec.from[*].namespace}'
+# expect: mcp-gateway-owl mcp-gateway-system
 ```
 
 > **Human gate:** `spec.listeners` on the `Gateway` now lists four entries
@@ -326,6 +344,20 @@ tenant's realm is rejected against the other tenant's hostname (cross-tenant iso
   keep must be listed every time. The default tenant's own fields (`gateway.publicHost`,
   `oidc.issuer`) are plain scalars, not part of any list, so `--set` is safe for them and they
   are never affected by what's in `extraTenants`.
+- **The MCP Gateway Operator allows only one `MCPGatewayExtension` per NAMESPACE, not per Gateway
+  — confirmed live, and the install guide is internally inconsistent about it.** One section states
+  flatly "Each Gateway object can have only one `MCPGatewayExtension` CR"; a later section
+  describes the valid working pattern as "team-specific `MCPGatewayExtension` CRs in individual
+  namespaces that all target a shared Gateway object." The second is correct — the actual live
+  error is `conflict: namespace <ns> already has MCPGatewayExtension <name> (only one per namespace
+  allowed)`, a namespace conflict, not a Gateway one. Every tenant (default included) needs a
+  distinct `extensionNamespace`; the chart fails fast on a collision rather than producing a
+  silently non-functional `MCPGatewayExtension` (`Ready: False`, no admission-time error).
+- **A `ReferenceGrant` is required whenever an extension's namespace differs from the Gateway's**
+  (true for the default tenant out of the box: `mcp-gateway-system` vs. `openshift-ingress`) — the
+  install guide's own prerequisite, confirmed live: without it the extension sits at `Ready: False,
+  Reason: ReferenceGrantRequired` indefinitely. This chart creates one automatically
+  (`templates/referencegrant.yaml`), covering every tenant's `extensionNamespace`.
 - **Both listeners in a tenant's pair must share `gateway.port`.** The gateway's `ext_proc`
   rewrites `:authority` and re-evaluates routing between `<tenant>-mcp` and `<tenant>-mcps` after
   parsing the JSON-RPC body — different ports break that hand-off silently.

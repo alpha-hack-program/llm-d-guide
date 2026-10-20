@@ -1,0 +1,38 @@
+# Required whenever an MCPGatewayExtension lives in a different namespace
+# than the Gateway it targets — true for the default tenant out of the box
+# (extension in extension.namespace, Gateway in gateway.namespace) and for
+# any extraTenants[] entry whose extensionNamespace differs from
+# gateway.namespace too. Confirmed live: without this, the extension sits
+# at `Ready: False, Reason: ReferenceGrantRequired` indefinitely — the
+# controller never retries once the grant is missing at creation time.
+#
+# One `from` entry per unique tenant extensionNamespace (the default
+# tenant's extension.namespace plus every enabled extraTenants[]'s
+# extensionNamespace), deduplicated so two tenants sharing a namespace
+# don't produce two identical entries. Map iteration in Helm/Go templates
+# is sorted by key, so this renders deterministically across runs.
+{{- $root := . }}
+{{- $namespaces := dict .Values.extension.namespace true }}
+{{- range $t := .Values.extraTenants }}
+{{- $tenant := include "mcp-gateway.extraTenant" (dict "tenant" $t "root" $root) | fromYaml }}
+{{- if $tenant.enabled }}
+{{- $namespaces = set $namespaces (required (printf "extraTenants[%s].extensionNamespace is required" $tenant.name) $tenant.extensionNamespace) true }}
+{{- end }}
+{{- end }}
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-mcp-gateway-ext
+  namespace: {{ .Values.gateway.namespace }}
+  labels:
+    app.kubernetes.io/part-of: mcp-gateway
+spec:
+  from:
+    {{- range $ns, $_ := $namespaces }}
+    - group: mcp.kuadrant.io
+      kind: MCPGatewayExtension
+      namespace: {{ $ns }}
+    {{- end }}
+  to:
+    - group: gateway.networking.k8s.io
+      kind: Gateway

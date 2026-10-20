@@ -55,13 +55,18 @@ single-tenant release's object names exactly (`mcp-gateway-authn`, `mcp-gateway-
 `mcp-gateway-ext`, `Route` `mcp-gateway`). It's never a list item, so it's never exposed to Helm's
 list-merge-replaces-the-whole-item behavior.
 
-Every tenant beyond the default is **additive**, via `extraTenants`. Each entry requires only
-`name` and `publicHost` (Helm `required` fails fast otherwise) and gets, independently:
+Every tenant beyond the default is **additive**, via `extraTenants`. Each entry requires `name`,
+`publicHost`, and `extensionNamespace` (Helm `required` fails fast otherwise) and gets,
+independently:
 
 - a `Gateway` listener `<tenant>-mcp` (external, has a hostname), its own `Route`, its own
-  `MCPGatewayExtension` — always.
+  `MCPGatewayExtension` in its own `extensionNamespace` — always. A matching `ReferenceGrant` entry
+  is added automatically — see "Per-tenant extension namespaces" below for why this field has no
+  default and must be unique.
 - if `oidcIssuer` is also set: a second listener `<tenant>-mcps` (internal, post-routing,
-  authn+authz) and its own `AuthPolicy` pair, trusting only that tenant's issuer.
+  authn+authz) and its own `AuthPolicy` pair, trusting only that tenant's issuer. This tenant must
+  also set its own `port`, distinct from `gateway.port` and every other OIDC-enabled tenant's port
+  — see "Per-tenant ports" below.
 
 Adding an `extraTenants` entry and re-running `helm upgrade` only appends new objects — it never
 edits the default tenant's objects or another extra tenant's.
@@ -76,7 +81,9 @@ oidc:
 extraTenants:
   - name: owl
     publicHost: owl-mcp.apps.ocp.example.com
+    extensionNamespace: mcp-gateway-owl   # must differ from mcp-gateway-system (the default tenant's)
     oidcIssuer: https://keycloak.apps.ocp.example.com/realms/owl
+    port: 8081   # required because oidcIssuer is set — see "Per-tenant ports" below
 ```
 
 ```bash
@@ -88,6 +95,48 @@ extraTenants[0].x=y` replaces the *entire* list item, silently dropping even `na
 as `mcp-gateway-authn-`, listeners as `-mcp`/`-mcps`, no error). Always use `-f <file>.yaml`, and
 list every tenant you want kept — the list from `-f` replaces the previous release's whole list,
 it's not merged by name.
+
+## Per-tenant ports
+
+Every tenant's two-listener pair shares one port (required for `ext_proc`'s `:authority` rewrite
+between `<tenant>-mcp` and `<tenant>-mcps`) — but that port must also be **unique across every
+OIDC-enabled tenant**, default included. The `-mcps` listener has no hostname, so Gateway API's
+`port`+`protocol`+`hostname` uniqueness rule collapses to "port must be unique" across that whole
+set; two OIDC-enabled tenants on the same port make the entire `Gateway` object invalid
+(`spec.listeners: Invalid value: Combination of port, protocol and hostname must be unique for each
+listener`) — confirmed live, and the failure gives no hint which tenant caused it.
+
+- The default tenant always uses `gateway.port` (`8080`).
+- Every `extraTenants[]` entry with `oidcIssuer` set **must** also set its own `port` — the chart's
+  `required` check fails fast, naming the tenant, if it's missing; a second `fail` check catches a
+  collision with the default tenant's or another tenant's port before it ever reaches the Gateway
+  API server.
+- A tenant with no `oidcIssuer` doesn't need `port` at all — it only gets the external `-mcp`
+  listener, disambiguated by `hostname`, which has no such constraint.
+
+## Per-tenant extension namespaces
+
+The MCP Gateway Operator allows only **one `MCPGatewayExtension` per namespace** — confirmed live,
+not just from the (internally inconsistent) install guide: a second extension in an
+already-claimed namespace sits at `Ready: False` with
+`conflict: namespace <ns> already has MCPGatewayExtension <name> (only one per namespace allowed)`.
+It does *not* care about the target `Gateway` or `sectionName` — the conflict is purely
+namespace-scoped, which is also why multiple tenants *can* safely share one `Gateway` object as
+long as each has its own namespace for its extension.
+
+Because of this, `extensionNamespace` has **no default** on `extraTenants[]` entries (unlike this
+chart's other namespace fields) — defaulting it to `mcp-gateway-system` would guarantee a collision
+with the default tenant's own extension, which lives there. Every enabled tenant (default included)
+needs a distinct `extensionNamespace`; the chart fails fast on a missing value or a collision,
+naming the two tenants involved, rather than letting it surface as a confusing live `Ready: False`.
+
+Whenever an extension's namespace differs from `gateway.namespace` (true by default, since the
+default tenant's own `mcp-gateway-ext` already lives in `mcp-gateway-system` while the `Gateway`
+lives in `openshift-ingress`), a `ReferenceGrant` is required or the extension sits at `Ready:
+False, Reason: ReferenceGrantRequired` indefinitely. This chart creates one automatically
+(`templates/referencegrant.yaml`), with one `from` entry per unique tenant `extensionNamespace` —
+nothing to apply by hand, unlike the original single-tenant chart this was generalized from, which
+required it as a separate, manually-applied resource for its first several revisions.
 
 ## OIDC: authentication is generic, authorization defaults to Keycloak
 
@@ -149,7 +198,7 @@ One field, one meaning: empty = disabled, set = enabled, nothing to forget to pa
 | `gateway.name` | `mcp-gateway` | | `Gateway`/`Route`/Service name base. |
 | `gateway.namespace` | `openshift-ingress` | | Where the `Gateway` object lives. |
 | `gateway.className` | `mcp-gateway-class` | | OpenShift's own Gateway API controller, not RHCL-specific. |
-| `gateway.port` | `8080` | | Shared by every tenant's listener pair — required for `ext_proc`'s `:authority` rewrite between a tenant's `-mcp`/`-mcps` listeners. Never give a tenant a different port. |
+| `gateway.port` | `8080` | | Default tenant's own `-mcp`/`-mcps` pair port — required for `ext_proc`'s `:authority` rewrite between them. Every OIDC-enabled `extraTenants[]` entry needs its own distinct port instead — see "Per-tenant ports" below. |
 | `gateway.publicHost` | `""` | **yes** | Default tenant's external hostname, e.g. `mcp.apps.<cluster-domain>`. |
 | `gateway.allowedNamespaces` | `[openshift-ingress, mcp-gateway-system]` | | Must include `extension.namespace` and every `extraTenants[].extensionNamespace`. |
 | `extension.name` / `.namespace` | `mcp-gateway-ext` / `mcp-gateway-system` | | Default tenant's `MCPGatewayExtension` name/namespace. |
@@ -157,7 +206,7 @@ One field, one meaning: empty = disabled, set = enabled, nothing to forget to pa
 | `auth.authorinoNamespace` / `.authorinoService` | `kuadrant-system` / `authorino-authorino-authorization` | | Where Kuadrant's own generated `EnvoyFilter` reaches Authorino's gRPC check (it omits TLS by default; this chart patches that in). |
 | `auth.toolAccessPredicate` / `.promptAccessPredicate` | Keycloak `resource_access` CEL | | Default tenant's authz CEL — see OIDC section above. |
 | `auth.tokenExchange.*` | disabled | | RFC 8693 token exchange, Keycloak-specific, Tech Preview path — see inline `values.yaml` comment for the Keycloak-side setup it requires. |
-| `extraTenants` | `[]` | | See "The default tenant vs. `extraTenants`" above. Each entry: `name`/`publicHost` required, `oidcIssuer` optional, `enabled`/`extensionNamespace`/`auth.*` default the same way the top-level fields do. |
+| `extraTenants` | `[]` | | See "The default tenant vs. `extraTenants`" above. Each entry: `name`/`publicHost`/`extensionNamespace` required, `oidcIssuer` optional, `port` required only if `oidcIssuer` is set (see "Per-tenant ports"), `enabled`/`auth.*` default the same way the top-level fields do. |
 
 ## Known gotchas
 
@@ -167,6 +216,12 @@ The highlights:
 - **Two separate OLM packages** — see Prerequisites above.
 - **`--set` on `extraTenants[N]` silently drops `name`** — see "The default tenant vs.
   `extraTenants`" above.
+- **A second OIDC-enabled tenant on the same port makes the whole `Gateway` invalid** — see
+  "Per-tenant ports" above; every OIDC-enabled tenant (default included) needs a unique `port`.
+- **A second `MCPGatewayExtension` in an already-claimed namespace is silently non-functional**
+  (`Ready: False`, no admission rejection) — see "Per-tenant extension namespaces" above; every
+  tenant (default included) needs a unique `extensionNamespace`, and the matching `ReferenceGrant`
+  is created automatically.
 - **Authorization defaults to Keycloak's claim shape, not generic OIDC** — see the OIDC section
   above; overridable per tenant, no template edits needed.
 - **The `<gateway-name>-istio` `ExternalName` alias is required on OpenShift** (any `className`

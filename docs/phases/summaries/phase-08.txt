@@ -35,10 +35,19 @@ Architecture:
     overriding both to a flat `groups` claim renders correctly alongside
     other tenants still using the Keycloak default.
   - Each extraTenants[] entry gets its OWN: a listener (<tenant>-mcp,
-    external), Route, and MCPGatewayExtension always; PLUS a second
-    listener (<tenant>-mcps, internal authn+authz) and AuthPolicy
-    pair if oidcIssuer is set. Required fields per entry: name,
-    publicHost (Helm `required`); oidcIssuer is optional.
+    external), Route, and MCPGatewayExtension (in its own
+    extensionNamespace) always; PLUS a second listener (<tenant>-mcps,
+    internal authn+authz) and AuthPolicy pair if oidcIssuer is set.
+    Required fields per entry: name, publicHost, extensionNamespace
+    (Helm `required`); oidcIssuer is optional.
+  - MCP Gateway Operator allows only ONE MCPGatewayExtension per
+    NAMESPACE (confirmed live; install guide is internally
+    inconsistent, but the live error is namespace-scoped: "conflict:
+    namespace <ns> already has MCPGatewayExtension <name>"). So
+    extensionNamespace has NO default (defaulting to mcp-gateway-system
+    would guarantee a collision with the default tenant) and must be
+    unique across every tenant. A matching ReferenceGrant entry is
+    created automatically per tenant.
   - Adding an extraTenants entry and re-applying only appends new
     objects; it never edits the default tenant's or another extra
     tenant's listeners/Route/extension/AuthPolicy.
@@ -63,6 +72,9 @@ Order matters:
        silently drops `name`, producing mangled objects
        (mcp-gateway-authn-, sectionName -mcp) with no error. Always
        use -f <file>.yaml, and list every extra tenant you want kept.
+     ⚠ extensionNamespace must be unique per tenant (e.g.
+       mcp-gateway-owl) — create the namespace first, the chart
+       doesn't. ReferenceGrant is created automatically.
   5. Smoke test: authenticated tools/list succeeds, unauthenticated
      request gets 401 + discovery header; cross-tenant token reuse
      is rejected

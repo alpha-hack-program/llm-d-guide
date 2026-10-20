@@ -9,8 +9,10 @@ gateway:
   # OpenShift's own built-in Gateway API controller, not RHCL-specific.
   className: mcp-gateway-class
   controllerName: openshift.io/gateway-controller/v1
-  # Shared by every tenant's listener pair — see README.md. Never give a
-  # tenant a different port.
+  # Shared by the default tenant's own mcp/mcps listener pair (required for
+  # ext_proc's :authority rewrite between them). OIDC-enabled extraTenants[]
+  # entries need their OWN distinct port — see extraTenants[].port below;
+  # this field is only for the default tenant.
   port: 8080
   # Default tenant's external hostname, e.g. mcp.apps.<cluster-domain>.
   # REQUIRED — the chart fails fast via Helm's `required` if left empty.
@@ -73,10 +75,31 @@ auth:
     credentialSecretKey: ""
 
 # Additional, fully isolated tenants beyond the default above — see
-# README.md for the full model. Each entry requires `name` and
-# `publicHost` (Helm `required`); everything else (`enabled`,
-# `extensionNamespace`, `oidcIssuer`, `auth.*`) is optional and defaults
-# the same way the top-level fields above do.
+# README.md for the full model. Each entry requires `name`, `publicHost`,
+# and `extensionNamespace` (Helm `required`); everything else (`enabled`,
+# `oidcIssuer`, `auth.*`) is optional and defaults the same way the
+# top-level fields above do.
+#
+# `extensionNamespace` has no default (unlike this chart's other namespace
+# fields) and must be unique across the default tenant and every other
+# enabled extraTenants[] entry: the MCP Gateway Operator allows only one
+# MCPGatewayExtension per namespace (confirmed live — a second one in the
+# same namespace sits at Ready: False, "conflict: namespace ... already has
+# MCPGatewayExtension ... (only one per namespace allowed)"). The chart
+# fails fast on a missing value or a collision rather than letting that
+# happen live. A matching ReferenceGrant (see templates/referencegrant.yaml)
+# is created automatically for every tenant's extensionNamespace — nothing
+# extra to apply by hand.
+#
+# `port` is REQUIRED whenever `oidcIssuer` is set: that tenant's internal
+# "-mcps" listener has no hostname, so Gateway API's uniqueness rule
+# (port+protocol+hostname) collapses to "port must be unique" across the
+# default tenant (gateway.port) and every other OIDC-enabled extraTenants[]
+# entry. The chart fails fast with a clear error on a collision or a missing
+# port, rather than letting the Gateway API server reject the whole Gateway
+# with a generic "must be unique for each listener" message. Tenants without
+# `oidcIssuer` don't need `port` — they only get the hostname-disambiguated
+# external "-mcp" listener, which has no such constraint.
 #
 # NEVER use `--set` for anything under extraTenants — Helm replaces the
 # whole list item, silently dropping even `name`. Always render from a
@@ -85,15 +108,18 @@ extraTenants: []
 # - name: owl
 #   enabled: true
 #   publicHost: owl-mcp.apps.<cluster-domain>
-#   extensionNamespace: mcp-gateway-system
+#   extensionNamespace: mcp-gateway-owl   # must differ from mcp-gateway-system (the default tenant's)
 #   oidcIssuer: https://<idp-host>/realms/owl
+#   port: 8081
 #   auth:
 #     tokenExchange:
 #       enabled: false
 # # A tenant on a non-Keycloak OIDC provider — see README.md's OIDC section.
 # - name: contoso
 #   publicHost: contoso-mcp.apps.<cluster-domain>
+#   extensionNamespace: mcp-gateway-contoso
 #   oidcIssuer: https://login.contoso-idp.example.com/v2
+#   port: 8082
 #   auth:
 #     toolAccessPredicate: |-
 #       ('tool:' + request.headers['x-mcp-toolname']) in auth.identity.groups

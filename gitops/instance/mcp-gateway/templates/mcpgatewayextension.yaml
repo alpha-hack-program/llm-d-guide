@@ -31,7 +31,7 @@ apiVersion: mcp.kuadrant.io/v1alpha1
 kind: MCPGatewayExtension
 metadata:
   name: {{ $root.Values.gateway.name }}-ext-{{ $tenant.name }}
-  namespace: {{ $tenant.extensionNamespace }}
+  namespace: {{ required (printf "extraTenants[%s].extensionNamespace is required" $tenant.name) $tenant.extensionNamespace }}
   labels:
     app.kubernetes.io/part-of: mcp-gateway
     mcp-gateway/tenant: {{ $tenant.name }}

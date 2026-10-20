@@ -37,7 +37,14 @@ promptAccessPredicate (see values.yaml's extraTenants example) to match
 that provider's claim shape instead of Keycloak's.
 */}}
 {{- define "mcp-gateway.extraTenant" -}}
-{{- $defaults := dict "enabled" true "extensionNamespace" "mcp-gateway-system" "oidcIssuer" "" "auth" (dict "toolAccessPredicate" .root.Values.auth.toolAccessPredicate "promptAccessPredicate" .root.Values.auth.promptAccessPredicate "tokenExchange" (dict "enabled" false "cacheTtlSeconds" 300 "credentialSecretName" "" "credentialSecretKey" "")) -}}
+{{- /*
+extensionNamespace has NO default (unlike the chart's other namespace
+fields) — see gateway.yaml/mcpgatewayextension.yaml/referencegrant.yaml's
+`required` checks. Defaulting it to mcp-gateway-system (the default
+tenant's own extension namespace) would guarantee a collision, since the
+MCP Gateway Operator allows only one MCPGatewayExtension per namespace.
+*/}}
+{{- $defaults := dict "enabled" true "extensionNamespace" "" "oidcIssuer" "" "port" "" "auth" (dict "toolAccessPredicate" .root.Values.auth.toolAccessPredicate "promptAccessPredicate" .root.Values.auth.promptAccessPredicate "tokenExchange" (dict "enabled" false "cacheTtlSeconds" 300 "credentialSecretName" "" "credentialSecretKey" "")) -}}
 {{- mergeOverwrite $defaults .tenant | toYaml -}}
 {{- end -}}
 

@@ -1,4 +1,4 @@
 apiVersion: v2
 description: Shared RHCL (Kuadrant) MCP Gateway — one Gateway, multiple isolated tenants
 name: mcp-gateway
-version: 1.0.0
+version: 1.2.0
