@@ -46,7 +46,7 @@ confirmed — common choices:
 - `g2-standard-4` — 1x NVIDIA L4 (cheaper, good for inference-sized models)
 
 ```bash
-GCP_GPU_INSTANCE_TYPE="${AWS_INSTANCE_TYPE:-g2-standard-4}"  # reuse the same user-provided var name as AWS for consistency, or ask fresh
+GCP_GPU_INSTANCE_TYPE="g2-standard-4"  # ask the user to confirm, or override
 GPU_REPLICAS=1   # per the AZ choice confirmed in the README — ocm machinepool autoscaling spans AZs within a region automatically
 
 ocm create machinepool --cluster "${OCM_CLUSTER_ID}" \
