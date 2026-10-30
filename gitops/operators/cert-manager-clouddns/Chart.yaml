@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cert-manager-clouddns
+description: A Helm chart to configure cert-manager Let's Encrypt (Google Cloud DNS) certificates for the default OpenShift certificates on GCP
+
+type: application
+
+version: 0.1.0
+
+appVersion: "1.16.0"

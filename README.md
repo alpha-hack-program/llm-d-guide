@@ -191,8 +191,8 @@ For the full details — CRD anatomy, RBAC requirements, catalog mapping, wait c
 RHOAI 3.5 requires several operators installed **before** creating the DataScienceCluster. Install them via **Operators → OperatorHub** in the web console or via CLI Subscription objects.
 
 > **Step-by-step CLI commands** for each section are in the phase guides:
-> - [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation.md)
-> - [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes.md)
+> - [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation/README.md) (+ [aws.md](docs/phases/01-tls-cert-automation/aws.md) / [gcp.md](docs/phases/01-tls-cert-automation/gcp.md) / [baremetal.md](docs/phases/01-tls-cert-automation/baremetal.md))
+> - [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes/README.md) (+ [aws.md](docs/phases/02-gpu-nodes/aws.md) / [gcp.md](docs/phases/02-gpu-nodes/gcp.md) / [baremetal.md](docs/phases/02-gpu-nodes/baremetal.md))
 > - [Phase 3 — Core Operators + RHOAI](docs/phases/03-operators-rhoai.md)
 > - [Phase 4 — Monitoring](docs/phases/04-monitoring.md)
 
@@ -206,13 +206,15 @@ RHOAI 3.5 requires several operators installed **before** creating the DataScien
 
 The chart deploys the `cert-manager-operator` and `cert-manager` namespaces, the OLM Subscription, the `CertManager` cluster configuration, monitoring RBAC and a `ServiceMonitor`, and (on AWS) a `CredentialsRequest` for Route53 access.
 
-Set `CLOUD` to **aws** when running on AWS, or **none** for bare metal / non-AWS.
+Set `CLOUD` to **aws**, **gcp**, or **none** for bare metal / other.
 
 > **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reaches `Succeeded`. This is expected. Wait for the CSV, then re-run — it applies cleanly on the second pass.
 
-> **Local CA (`TLS_ISSUER=local-ca`):** Works on any platform, including AWS — useful for labs, demos, or clusters without public DNS. Uses the `cert-manager-local-ca` chart to create a local CA chain that issues properly signed certificates for the cluster's API and ingress endpoints. The CA must be injected into the cluster trust bundle afterwards. See [Phase 1 — Local CA alternative](docs/phases/01-tls-cert-automation.md#step-2--alternative-local-ca) for the full procedure.
+> **Managed clusters (OpenShift Dedicated / ROSA):** check for an existing, publicly-trusted certificate before doing any of the above — confirmed live, most managed clusters already have one and need none of this phase at all. See [Phase 1 README — Step 0](docs/phases/01-tls-cert-automation/README.md#step-0--managed-clusters-use-the-existing-public-certificate).
 
-**CLI commands:** [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation.md)
+> **Local CA (`TLS_ISSUER=local-ca`):** Works on any platform — useful for labs, demos, or clusters without public DNS. Uses the `cert-manager-local-ca` chart to create a local CA chain that issues properly signed certificates for the cluster's API and ingress endpoints. The CA must be injected into the cluster trust bundle afterwards — this step is **blocked on managed OSD/ROSA clusters** by SRE admission webhooks (confirmed live); use the existing public certificate there instead. See [Phase 1 — Local CA](docs/phases/01-tls-cert-automation/README.md#step-2--local-ca-or-lets-encrypt) for the full procedure.
+
+**CLI commands:** [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation/README.md) ([aws.md](docs/phases/01-tls-cert-automation/aws.md) | [gcp.md](docs/phases/01-tls-cert-automation/gcp.md) | [baremetal.md](docs/phases/01-tls-cert-automation/baremetal.md))
 
 Verify certificate status:
 
@@ -230,7 +232,7 @@ oc get certificates.cert-manager.io --all-namespaces \
 
 Each operator directory contains an `install.sh` script that queries `oc get packagemanifest` at runtime to resolve the current default channel and CSV, so the manifests stay valid across OCP releases. Alternatively, install via **Operators → OperatorHub** in the web console.
 
-**CLI commands:** [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes.md)
+**CLI commands:** [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes/README.md) ([aws.md](docs/phases/02-gpu-nodes/aws.md) | [gcp.md](docs/phases/02-gpu-nodes/gcp.md) | [baremetal.md](docs/phases/02-gpu-nodes/baremetal.md))
 
 See: [NVIDIA GPU Operator on Red Hat OpenShift Container Platform](https://docs.nvidia.com/datacenter/cloud-native/openshift/latest/index.html)
 
@@ -715,7 +717,7 @@ policy → cross-tenant isolation smoke test).
 | --- | --- | --- |
 | `HTTPRoutesReady: False` — `NotAllowedByListeners` | Model namespace not in Gateway `allowedRoutes` | Re-apply gateway chart with `--set "gateway.modelNamespaces={<ns>}"` |
 | `maas-api` pod not starting | Kuadrant CR not Ready or `maas-default-gateway` missing | Check `oc get kuadrant -n kuadrant-system` and `oc get gateway maas-default-gateway -n openshift-ingress` |
-| Kuadrant CR `Ready: False` — `MissingDependency` on OCP 4.20+ | Operator started before detecting OCP built-in Gateway API | Delete the operator pod to force a restart: `oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator` |
+| Kuadrant CR `Ready: False` — `MissingDependency` on OCP 4.20+ | Operator started before detecting OCP built-in Gateway API | Delete the operator pod to force a restart: `oc delete pod -n openshift-operators -l app=kuadrant,control-plane=controller-manager` |
 | No `AuthConfig` resources after enabling MaaS | Kuadrant operator not running / CR not Ready | Verify `oc get kuadrant -n kuadrant-system` shows `Ready: True` |
 | `POST /maas-api/v1/api-keys` returns `500` | Authorino TLS not configured; Envoy→Authorino connection uses plain gRPC but Authorino expects TLS | Run Step 5 (Authorino TLS) then remove+re-add the gateway `authorino-tls-bootstrap` annotation |
 | `maas-default-gateway-authn-ssl` EnvoyFilter missing | Gateway annotation applied before Authorino TLS was enabled | Remove annotation (`oc annotate gateway ... security.opendatahub.io/authorino-tls-bootstrap-`) then re-add it |
@@ -767,8 +769,8 @@ with wait conditions and human gates:
 | Phase | Guide | Approx. time |
 |---|---|---|
 | 0 — Cluster Validation | [docs/phases/00-validation.md](docs/phases/00-validation.md) | 5 min |
-| 1 — TLS Certificate Automation | [docs/phases/01-tls-cert-automation.md](docs/phases/01-tls-cert-automation.md) | 15–20 min |
-| 2 — GPU Nodes + NFD + NVIDIA | [docs/phases/02-gpu-nodes.md](docs/phases/02-gpu-nodes.md) | 20–40 min |
+| 1 — TLS Certificate Automation | [docs/phases/01-tls-cert-automation/README.md](docs/phases/01-tls-cert-automation/README.md) | 15–20 min |
+| 2 — GPU Nodes + NFD + NVIDIA | [docs/phases/02-gpu-nodes/README.md](docs/phases/02-gpu-nodes/README.md) | 20–40 min |
 | 3 — Operators + RHOAI | [docs/phases/03-operators-rhoai.md](docs/phases/03-operators-rhoai.md) | 20–30 min |
 | 4 — Monitoring | [docs/phases/04-monitoring.md](docs/phases/04-monitoring.md) | 10 min |
 | 5 — llm-d Quick Start | [docs/phases/05-llmd-quickstart.md](docs/phases/05-llmd-quickstart.md) | 15–20 min |
@@ -822,7 +824,7 @@ oc logs -f -l app.kubernetes.io/component=llminferenceservice-router-scheduler -
 | Hardware profiles missing after toggling `disableKueue` | Dashboard does not reload config automatically | Restart the dashboard: `oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications` |
 | model-catalog API returns 500 errors | PostgreSQL schema empty (migrations did not apply) | Restart model-catalog: `oc rollout restart deployment/model-catalog -n rhoai-model-registries` |
 | `LLMInferenceService` `HTTPRoutesReady: False` — `NotAllowedByListeners` | Model namespace missing from MaaS Gateway `allowedRoutes` | Re-apply gateway chart: `helm template gitops/instance/maas/gateway ... --set "gateway.modelNamespaces={<ns>}" \| oc apply -f -` |
-| Kuadrant CR `Ready: False` — `MissingDependency (istio/envoy gateway)` on OCP 4.20+ | Operator pod started before detecting OCP built-in Gateway API | `oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator` |
+| Kuadrant CR `Ready: False` — `MissingDependency (istio/envoy gateway)` on OCP 4.20+ | Operator pod started before detecting OCP built-in Gateway API | `oc delete pod -n openshift-operators -l app=kuadrant,control-plane=controller-manager` |
 
 ---
 

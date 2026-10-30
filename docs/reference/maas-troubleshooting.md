@@ -27,7 +27,7 @@ on OCP 4.19+ the OCP built-in Gateway API controller is sufficient — no Servic
 the operator pod to force a restart and let it detect the built-in controller:
 
 ```bash
-oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
+oc delete pod -n openshift-operators -l app=kuadrant,control-plane=controller-manager
 ```
 
 ## Gateway `allowedRoutes` — model namespaces

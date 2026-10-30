@@ -41,12 +41,22 @@ oc get pods -n openshift-user-workload-monitoring | grep prometheus-user-workloa
 
 ### Step 1 — Configure the Gateway
 
+> **On a managed cluster (OSD/ROSA):** use the existing public certificate instead of
+> `ingress-certs` in Options A/B below — confirmed live, this needs no cert-manager at all:
+> `--set tls.secretName="$(oc get ingresscontroller/default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}')"`.
+> See [01-tls-cert-automation/README.md Step 0](01-tls-cert-automation/README.md#step-0--managed-clusters-use-the-existing-public-certificate).
+> Do not guess a secret name (e.g. `router-certs-default`) that doesn't already exist — see the
+> gotcha in [06-maas.md Step 1](06-maas.md#step-1--maas-gateway) for why that silently creates the
+> wrong certificate instead of reusing one.
+
 **Ask the user which gateway exposure method to use:**
 
 **Option A — LoadBalancer with pre-existing certificate:**
 
-Creates a dedicated AWS LoadBalancer with a custom subdomain (`inference.apps.<domain>`).
-Requires Phase 1 Let's Encrypt certs.
+Creates a dedicated cloud LoadBalancer (AWS NLB, GCP Network LB, etc. — whatever the cluster's
+cloud provider is) with a custom subdomain (`inference.apps.<domain>`). Requires Phase 1
+certificates (either Let's Encrypt, local-ca, or the existing managed-cluster public cert — see
+[01-tls-cert-automation](01-tls-cert-automation/README.md)).
 
 ```bash
 APP_NAME=gateway

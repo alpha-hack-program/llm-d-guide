@@ -22,4 +22,9 @@ spec:
       - name: CLOUD_CREDENTIALS_SECRET_NAME
         value: aws-creds
     {{- end }}
+    {{- if eq .Values.cloud "gcp" }}
+    env:
+      - name: CLOUD_CREDENTIALS_SECRET_NAME
+        value: gcp-creds
+    {{- end }}
 {{- end }}

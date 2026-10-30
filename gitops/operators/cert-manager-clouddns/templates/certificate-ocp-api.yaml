@@ -1,0 +1,19 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ocp-api
+  namespace: openshift-config
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  isCA: false
+  commonName: "api.{{ .Values.clusterDomain }}"
+  dnsNames:
+  - "api.{{ .Values.clusterDomain }}"
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+    group: cert-manager.io
+  secretName: api-certs
