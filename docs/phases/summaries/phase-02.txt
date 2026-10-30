@@ -4,20 +4,31 @@
 
 Goal:     Add GPU worker nodes and install hardware detection/driver stack.
 Time:     ~20-40 min (GPU node provisioning dominates)
-Requires: AWS_INSTANCE_TYPE, AMI_ID, INFRA_ID, AWS_REGION
+Requires: cloud-specific vars — see the per-cloud guide below
 
 Steps:
   1. Ask user: How many AZs? (3 for prod, 1 for test)
-  2. Create GPU MachineSets (one per AZ)
-  3. Install NFD operator → wait CSV Succeeded
-  4. Install NVIDIA GPU operator → wait CSV Succeeded
+  2. Create GPU nodes (cloud-specific — see guide):
+     AWS: raw MachineSets (gitops/instance/machine-sets/gpu-worker chart)
+     GCP: ocm create machinepool (OSD/ROSA) or raw GCPMachineProviderSpec
+          MachineSet (self-managed IPI)
+     Bare metal: label/taint already-joined physical nodes
+  3. Install NFD operator → wait CSV Succeeded (identical on every platform)
+  4. Install NVIDIA GPU operator → wait CSV Succeeded (identical on every platform)
   5. Apply NFD instance CR → wait for labels
   6. Apply NVIDIA ClusterPolicy CR → wait for ready
+     (reports "ready" trivially even with zero GPU nodes present — confirmed live)
+
+Cloud-specific guides:
+  docs/phases/02-gpu-nodes/aws.md
+  docs/phases/02-gpu-nodes/gcp.md
+  docs/phases/02-gpu-nodes/baremetal.md
 
 Human gate:
-  - At least one GPU Machine is Provisioned
+  - At least one GPU node/machine is Provisioned (or operators are ready and
+    GPU provisioning is deferred)
   - Both operator CSVs Succeeded
   - GPU capacity check deferred to Phase 5
 
-Guide: docs/phases/02-gpu-nodes.md
+Guide: docs/phases/02-gpu-nodes/README.md
 ══════════════════════════════════════════════════════════════

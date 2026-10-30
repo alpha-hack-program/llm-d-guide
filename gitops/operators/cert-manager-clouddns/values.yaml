@@ -1,0 +1,40 @@
+# Default values for cert-manager-clouddns.
+#
+# ADVANCED / NOT LIVE-VALIDATED: this chart is the GCP equivalent of
+# cert-manager-route53 (Let's Encrypt via DNS-01). It is documented for
+# self-managed GCP IPI clusters where the Cloud Credential Operator runs in
+# Mint mode and can fulfill the CredentialsRequest in
+# ../cert-manager-operator/templates/credentialsrequest.yaml directly.
+#
+# On GCP clusters where CCO runs in Manual mode with Workload Identity
+# Federation (this is the default for OpenShift Dedicated / ROSA-style
+# managed clusters — check with `oc get cloudcredential cluster
+# -o jsonpath='{.spec.credentialsMode}'`), the CredentialsRequest is NOT
+# auto-fulfilled. You must run `ccoctl gcp create-service-accounts` (or
+# equivalent manual GCP IAM + Workload Identity Pool binding) yourself to
+# populate the `gcp-creds` secret referenced below before this chart's
+# ClusterIssuers will work. See docs/phases/01-tls-cert-automation/gcp.md.
+#
+# For Manual/WIF GCP clusters, TLS_ISSUER=local-ca (cert-manager-local-ca
+# chart) is the recommended and tested default — it requires no cloud
+# credentials at all.
+#
+# CRITICAL: clusterDomain must be the cluster BASE DOMAIN (from
+# dns.config/cluster .spec.baseDomain), NOT the apps ingress domain or a
+# parent public domain. The chart generates:
+#   - API cert: api.<clusterDomain>
+#   - Ingress cert: apps.<clusterDomain> + *.apps.<clusterDomain>
+#
+# VALIDATION: Run ./scripts/validate-cluster-domain.sh to ensure correct extraction.
+#
+# PREREQUISITE: a Google Cloud DNS managed zone covering <clusterDomain> must
+# exist in `project` and be reachable by the service account bound to the
+# `gcp-creds` secret (role: roles/dns.admin, or a custom role scoped to that
+# one managed zone).
+
+etcdEncryption:
+  enabled: false
+
+clouddns:
+  project: ""  # GCP project ID that hosts the Cloud DNS managed zone (set via --set clouddns.project=...)
+  hostedZoneName: ""  # (Optional) Explicit Cloud DNS managed zone name. Required when auto-discovery by domain is ambiguous.

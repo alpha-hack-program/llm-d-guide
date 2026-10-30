@@ -21,13 +21,14 @@
 10. [MaaS Demo (Optional)](docs/demos/maas-demo.md)
 11. [External Model MaaS Demo (Optional)](docs/demos/external-model-demo.md)
 12. [Full MaaS Reset](docs/demos/maas-reset.md)
-13. [AI-Assisted Installation](#ai-assisted-installation)
-14. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
-15. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
-16. [Appendix C — Reference Links](#appendix-c--reference-links)
-17. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
-18. [Appendix E — Token Rate Limiting](#appendix-e--token-rate-limiting-behaviour-and-observability)
-19. [Appendix F — ArgoCD (Red Hat OpenShift GitOps)](#appendix-f--argocd-red-hat-openshift-gitops)
+13. [MCP Gateway (Optional)](docs/phases/08-mcp-gateway.md)
+14. [AI-Assisted Installation](#ai-assisted-installation)
+15. [Appendix A — Quick-Reference Commands](#appendix-a--quick-reference-commands)
+16. [Appendix B — Troubleshooting](#appendix-b--troubleshooting)
+17. [Appendix C — Reference Links](#appendix-c--reference-links)
+18. [Appendix D — MaaS with Self-Signed TLS Certificates](#appendix-d--maas-with-self-signed-tls-certificates)
+19. [Appendix E — Token Rate Limiting](#appendix-e--token-rate-limiting-behaviour-and-observability)
+20. [Appendix F — ArgoCD (Red Hat OpenShift GitOps)](#appendix-f--argocd-red-hat-openshift-gitops)
 
 ---
 
@@ -49,8 +50,9 @@ Red Hat OpenShift AI (RHOAI) 3.5 is a self-managed AI/ML platform that provides 
 **Additional Features:**
 
 * Distributed Inference with llm-d — GA in RHOAI 3.5 (disaggregated prefill/decode, Inference Gateway, KV-cache-aware routing). **Requires OCP 4.20 or later.**
-* Model as a Service — MaaS (governed, rate-limited LLM access via AI Gateway and Connectivity Link)
+* Model as a Service — MaaS (governed, rate-limited LLM access via AI Gateway and Connectivity Link). **Multi-tenant supported** — any number of fully isolated tenants, each with its own dedicated `Gateway`, namespace, `maas-api` instance, and RBAC.
 * OGX (OpenAI-compatible RAG APIs and agentic AI, replaces Llama Stack Operator)
+* MCP Gateway (Technology Preview, optional, standalone from RHOAI/llm-d/MaaS) — shared RHCL/Kuadrant gateway giving OIDC-authenticated HTTP access to MCP tool servers. **Multi-tenant supported** — one `Gateway` shared by any number of isolated tenants, each with its own realm, hostname, and auth policy.
 
 **Cross-Cutting Concerns:**
 
@@ -189,8 +191,8 @@ For the full details — CRD anatomy, RBAC requirements, catalog mapping, wait c
 RHOAI 3.5 requires several operators installed **before** creating the DataScienceCluster. Install them via **Operators → OperatorHub** in the web console or via CLI Subscription objects.
 
 > **Step-by-step CLI commands** for each section are in the phase guides:
-> - [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation.md)
-> - [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes.md)
+> - [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation/README.md) (+ [aws.md](docs/phases/01-tls-cert-automation/aws.md) / [gcp.md](docs/phases/01-tls-cert-automation/gcp.md) / [baremetal.md](docs/phases/01-tls-cert-automation/baremetal.md))
+> - [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes/README.md) (+ [aws.md](docs/phases/02-gpu-nodes/aws.md) / [gcp.md](docs/phases/02-gpu-nodes/gcp.md) / [baremetal.md](docs/phases/02-gpu-nodes/baremetal.md))
 > - [Phase 3 — Core Operators + RHOAI](docs/phases/03-operators-rhoai.md)
 > - [Phase 4 — Monitoring](docs/phases/04-monitoring.md)
 
@@ -204,13 +206,15 @@ RHOAI 3.5 requires several operators installed **before** creating the DataScien
 
 The chart deploys the `cert-manager-operator` and `cert-manager` namespaces, the OLM Subscription, the `CertManager` cluster configuration, monitoring RBAC and a `ServiceMonitor`, and (on AWS) a `CredentialsRequest` for Route53 access.
 
-Set `CLOUD` to **aws** when running on AWS, or **none** for bare metal / non-AWS.
+Set `CLOUD` to **aws**, **gcp**, or **none** for bare metal / other.
 
 > **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reaches `Succeeded`. This is expected. Wait for the CSV, then re-run — it applies cleanly on the second pass.
 
-> **Local CA (`TLS_ISSUER=local-ca`):** Works on any platform, including AWS — useful for labs, demos, or clusters without public DNS. Uses the `cert-manager-local-ca` chart to create a local CA chain that issues properly signed certificates for the cluster's API and ingress endpoints. The CA must be injected into the cluster trust bundle afterwards. See [Phase 1 — Local CA alternative](docs/phases/01-tls-cert-automation.md#step-2--alternative-local-ca) for the full procedure.
+> **Managed clusters (OpenShift Dedicated / ROSA):** check for an existing, publicly-trusted certificate before doing any of the above — confirmed live, most managed clusters already have one and need none of this phase at all. See [Phase 1 README — Step 0](docs/phases/01-tls-cert-automation/README.md#step-0--managed-clusters-use-the-existing-public-certificate).
 
-**CLI commands:** [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation.md)
+> **Local CA (`TLS_ISSUER=local-ca`):** Works on any platform — useful for labs, demos, or clusters without public DNS. Uses the `cert-manager-local-ca` chart to create a local CA chain that issues properly signed certificates for the cluster's API and ingress endpoints. The CA must be injected into the cluster trust bundle afterwards — this step is **blocked on managed OSD/ROSA clusters** by SRE admission webhooks (confirmed live); use the existing public certificate there instead. See [Phase 1 — Local CA](docs/phases/01-tls-cert-automation/README.md#step-2--local-ca-or-lets-encrypt) for the full procedure.
+
+**CLI commands:** [Phase 1 — TLS Certificate Automation](docs/phases/01-tls-cert-automation/README.md) ([aws.md](docs/phases/01-tls-cert-automation/aws.md) | [gcp.md](docs/phases/01-tls-cert-automation/gcp.md) | [baremetal.md](docs/phases/01-tls-cert-automation/baremetal.md))
 
 Verify certificate status:
 
@@ -228,7 +232,7 @@ oc get certificates.cert-manager.io --all-namespaces \
 
 Each operator directory contains an `install.sh` script that queries `oc get packagemanifest` at runtime to resolve the current default channel and CSV, so the manifests stay valid across OCP releases. Alternatively, install via **Operators → OperatorHub** in the web console.
 
-**CLI commands:** [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes.md)
+**CLI commands:** [Phase 2 — GPU Nodes + NFD + NVIDIA](docs/phases/02-gpu-nodes/README.md) ([aws.md](docs/phases/02-gpu-nodes/aws.md) | [gcp.md](docs/phases/02-gpu-nodes/gcp.md) | [baremetal.md](docs/phases/02-gpu-nodes/baremetal.md))
 
 See: [NVIDIA GPU Operator on Red Hat OpenShift Container Platform](https://docs.nvidia.com/datacenter/cloud-native/openshift/latest/index.html)
 
@@ -437,6 +441,10 @@ MaaS provides subscription-based governed access to LLMs via `sk-oai-*` API keys
 
 Access control is CRD-based: `MaaSSubscription` defines token rate limits per model per group, and `MaaSAuthPolicy` grants groups access to models. Users can belong to multiple subscriptions. All config lives in the `models-as-a-service` namespace and is fully GitOps-compatible.
 
+**Multi-tenant supported** — beyond the single default tenant covered below, MaaS supports any
+number of additional, fully isolated tenants, each with its own dedicated `Gateway`, namespace,
+`maas-api` instance, and RBAC. See [9.5 Multi-Tenant MaaS](#95-multi-tenant-maas-optional).
+
 ### Architecture overview
 
 ```mermaid
@@ -479,7 +487,7 @@ flowchart TD
 
     subgraph MAS["models-as-a-service"]
         direction TB
-        TENANT["Tenant  default-tenant\nmaxExpirationDays: 90"]
+        TENANT["MaasTenantConfig  default-tenant\nmaxExpirationDays: 90\n(auto-created by AITenant — see §9.5)"]
         MSUB["MaaSSubscription  admin-subscription\ntokenRateLimits: 100k / 1h"]
         MAAP["MaaSAuthPolicy  admin-auth-policy\ngroups: cluster-admins"]
     end
@@ -565,7 +573,8 @@ flowchart TD
 | `Authorino`, `Limitador` | `kuadrant-system` | Kuadrant operator |
 | `maas-api`, `maas-controller`, `maas-db` | `redhat-ai-gateway-infra` | RHOAI operator |
 | `HTTPRoute` maas-api-route | `redhat-ai-gateway-infra` | RHOAI operator |
-| `Tenant`, `MaaSSubscription`, `MaaSAuthPolicy` | `models-as-a-service` | You |
+| `AITenant` | `ai-tenants` | Auto-created (`Config` singleton bootstraps the default tenant once `modelsAsService=true`) |
+| `MaasTenantConfig`, `MaaSSubscription`, `MaaSAuthPolicy` | `models-as-a-service` | `MaasTenantConfig` is auto-created by the `AITenant`; `MaaSSubscription`/`MaaSAuthPolicy` are you |
 | `MaaSModelRef` | `llm-d-demo` (model namespace) | Inference chart (`maas.enabled=true`) or dashboard toggle |
 | `AuthPolicy`, `TokenRateLimitPolicy` | `llm-d-demo` | `maas-controller` |
 | `HTTPRoute`, `InferencePool` (model) | `llm-d-demo` | `odh-model-controller` / kserve controller |
@@ -595,7 +604,7 @@ flowchart TD
 3. **MaaS Database** — PostgreSQL + `maas-db-config` secret
 4. **Enable MaaS in DSC** — re-apply RHOAI chart with `modelsAsService=true`
 5. **Authorino TLS** — annotate service → patch CR → set env vars → annotate gateway
-6. **Bootstrap subscriptions** — `models-as-a-service` namespace + Tenant + DB_CONNECTION_URL patch
+6. **Verify the default tenant auto-bootstrap** — `Config` → `AITenant` → `MaasTenantConfig` reconcile automatically once step 4 lands; nothing to apply manually
 7. **Register models** — MaaSModelRef + MaaSSubscription + MaaSAuthPolicy
 8. **Enable dashboard** — four `OdhDashboardConfig` flags
 
@@ -603,6 +612,7 @@ flowchart TD
 > - Use `tls.secretName=router-certs-default`, **not** `ingress-certs` — the service-ca-operator overwrites `ingress-certs` with an internal-only cert. See [Phase 6 Step 1](docs/phases/06-maas.md#step-1--maas-gateway) for details.
 > - `modelsAsService` must stay `false` during Phase 3. The `maas-api` pod requires both the gateway and database to exist before starting.
 > - Without Authorino TLS, `POST /maas-api/v1/api-keys` returns `500`.
+> - The `Tenant` CRD is a deprecated no-op compatibility shim — do not create one. The real objects (`Config`, `AITenant`, `MaasTenantConfig`) auto-bootstrap; see [Phase 6 Step 5](docs/phases/06-maas.md#step-5--verify-the-default-tenant-auto-bootstrap).
 
 ### 9.3 Publish a Model to MaaS
 
@@ -686,13 +696,28 @@ oc get tokenratelimitpolicy -n llm-d-demo
 oc get tokenratelimitpolicy maas-trlp-qwen3-8b -n llm-d-demo -o yaml
 ```
 
-### 9.5 MaaS Troubleshooting
+### 9.5 Multi-Tenant MaaS (Optional)
+
+Beyond the single default tenant set up above, MaaS supports additional fully isolated tenants —
+each with its own dedicated `Gateway`, tenant namespace, `maas-api` instance, and RBAC, with no
+shared subscriptions, auth policies, or rate limits between tenants.
+
+The tenant model is `Config` (cluster singleton) → `AITenant` → `MaasTenantConfig`: creating an
+`AITenant` auto-provisions everything beneath it. The one hard constraint, enforced by an
+admission webhook: **every `AITenant` requires its own dedicated `Gateway`** —
+`maas-default-gateway` is already claimed by the default tenant above and cannot be shared.
+
+Follow [Phase 7 — MaaS Multi-Tenant](docs/phases/07-maas-multi-tenant.md) for the full
+per-tenant install sequence (dedicated gateway → `AITenant` → RBAC → model → subscription/auth
+policy → cross-tenant isolation smoke test).
+
+### 9.6 MaaS Troubleshooting
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
 | `HTTPRoutesReady: False` — `NotAllowedByListeners` | Model namespace not in Gateway `allowedRoutes` | Re-apply gateway chart with `--set "gateway.modelNamespaces={<ns>}"` |
 | `maas-api` pod not starting | Kuadrant CR not Ready or `maas-default-gateway` missing | Check `oc get kuadrant -n kuadrant-system` and `oc get gateway maas-default-gateway -n openshift-ingress` |
-| Kuadrant CR `Ready: False` — `MissingDependency` on OCP 4.20+ | Operator started before detecting OCP built-in Gateway API | Delete the operator pod to force a restart: `oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator` |
+| Kuadrant CR `Ready: False` — `MissingDependency` on OCP 4.20+ | Operator started before detecting OCP built-in Gateway API | Delete the operator pod to force a restart: `oc delete pod -n openshift-operators -l app=kuadrant,control-plane=controller-manager` |
 | No `AuthConfig` resources after enabling MaaS | Kuadrant operator not running / CR not Ready | Verify `oc get kuadrant -n kuadrant-system` shows `Ready: True` |
 | `POST /maas-api/v1/api-keys` returns `500` | Authorino TLS not configured; Envoy→Authorino connection uses plain gRPC but Authorino expects TLS | Run Step 5 (Authorino TLS) then remove+re-add the gateway `authorino-tls-bootstrap` annotation |
 | `maas-default-gateway-authn-ssl` EnvoyFilter missing | Gateway annotation applied before Authorino TLS was enabled | Remove annotation (`oc annotate gateway ... security.opendatahub.io/authorino-tls-bootstrap-`) then re-add it |
@@ -724,21 +749,34 @@ Wipe all demo state from Sections 10 and 11 and start from a clean slate. See: *
 
 ---
 
+## 13. MCP Gateway (Optional)
+
+A shared RHCL (Kuadrant) MCP Gateway — one `Gateway` object giving external MCP clients (agents,
+IDEs, sandboxes) OIDC-authenticated HTTP access to MCP tool servers. Standalone from RHOAI/llm-d/MaaS.
+**Multi-tenant supported**: any number of fully isolated tenants can share the one `Gateway`, each
+with its own hostname, Keycloak realm, and auth policy — adding a tenant never touches another
+tenant's objects. Technology Preview. See the full walkthrough:
+**[docs/phases/08-mcp-gateway.md](docs/phases/08-mcp-gateway.md)**
+
+---
+
 ## AI-Assisted Installation
 
 For guided installation using Claude Code, Cursor, or compatible AI coding assistants,
-see the [Co-pilot Runbook](AGENTS.md). The runbook breaks installation into 7 phases
+see the [Co-pilot Runbook](AGENTS.md). The runbook breaks installation into 9 phases
 with wait conditions and human gates:
 
 | Phase | Guide | Approx. time |
 |---|---|---|
 | 0 — Cluster Validation | [docs/phases/00-validation.md](docs/phases/00-validation.md) | 5 min |
-| 1 — TLS Certificate Automation | [docs/phases/01-tls-cert-automation.md](docs/phases/01-tls-cert-automation.md) | 15–20 min |
-| 2 — GPU Nodes + NFD + NVIDIA | [docs/phases/02-gpu-nodes.md](docs/phases/02-gpu-nodes.md) | 20–40 min |
+| 1 — TLS Certificate Automation | [docs/phases/01-tls-cert-automation/README.md](docs/phases/01-tls-cert-automation/README.md) | 15–20 min |
+| 2 — GPU Nodes + NFD + NVIDIA | [docs/phases/02-gpu-nodes/README.md](docs/phases/02-gpu-nodes/README.md) | 20–40 min |
 | 3 — Operators + RHOAI | [docs/phases/03-operators-rhoai.md](docs/phases/03-operators-rhoai.md) | 20–30 min |
 | 4 — Monitoring | [docs/phases/04-monitoring.md](docs/phases/04-monitoring.md) | 10 min |
 | 5 — llm-d Quick Start | [docs/phases/05-llmd-quickstart.md](docs/phases/05-llmd-quickstart.md) | 15–20 min |
 | 6 — MaaS | [docs/phases/06-maas.md](docs/phases/06-maas.md) | 10–15 min |
+| 7 — MaaS Multi-Tenant | [docs/phases/07-maas-multi-tenant.md](docs/phases/07-maas-multi-tenant.md) | 15–20 min |
+| 8 — MCP Gateway (Optional) | [docs/phases/08-mcp-gateway.md](docs/phases/08-mcp-gateway.md) | 15–20 min (+5 min/tenant) |
 
 Reference material:
 - [Validation Commands](docs/reference/validation.md)
@@ -786,7 +824,7 @@ oc logs -f -l app.kubernetes.io/component=llminferenceservice-router-scheduler -
 | Hardware profiles missing after toggling `disableKueue` | Dashboard does not reload config automatically | Restart the dashboard: `oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications` |
 | model-catalog API returns 500 errors | PostgreSQL schema empty (migrations did not apply) | Restart model-catalog: `oc rollout restart deployment/model-catalog -n rhoai-model-registries` |
 | `LLMInferenceService` `HTTPRoutesReady: False` — `NotAllowedByListeners` | Model namespace missing from MaaS Gateway `allowedRoutes` | Re-apply gateway chart: `helm template gitops/instance/maas/gateway ... --set "gateway.modelNamespaces={<ns>}" \| oc apply -f -` |
-| Kuadrant CR `Ready: False` — `MissingDependency (istio/envoy gateway)` on OCP 4.20+ | Operator pod started before detecting OCP built-in Gateway API | `oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator` |
+| Kuadrant CR `Ready: False` — `MissingDependency (istio/envoy gateway)` on OCP 4.20+ | Operator pod started before detecting OCP built-in Gateway API | `oc delete pod -n openshift-operators -l app=kuadrant,control-plane=controller-manager` |
 
 ---
 

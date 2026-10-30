@@ -1,0 +1,183 @@
+# Shared RHCL (Kuadrant) MCP Gateway — see README.md for prerequisites,
+# quick start, the default-tenant-vs-extraTenants model, the OIDC
+# authentication-vs-authorization split, and known gotchas.
+# Full walkthrough: docs/phases/08-mcp-gateway.md.
+
+gateway:
+  name: mcp-gateway
+  namespace: openshift-ingress
+  # OpenShift's own built-in Gateway API controller, not RHCL-specific.
+  className: mcp-gateway-class
+  controllerName: openshift.io/gateway-controller/v1
+  # Shared by the default tenant's own mcp/mcps listener pair (required for
+  # ext_proc's :authority rewrite between them). OIDC-enabled extraTenants[]
+  # entries need their OWN distinct port — see extraTenants[].port below;
+  # this field is only for the default tenant.
+  port: 8080
+  # Default tenant's external hostname, e.g. mcp.apps.<cluster-domain>.
+  # REQUIRED — the chart fails fast via Helm's `required` if left empty.
+  publicHost: ""
+  # Must include extension.namespace and every
+  # extraTenants[].extensionNamespace.
+  allowedNamespaces:
+    - openshift-ingress
+    - mcp-gateway-system
+
+extension:
+  name: mcp-gateway-ext
+  namespace: mcp-gateway-system
+
+oidc:
+  # Default tenant's OIDC issuer URL, e.g. https://<idp-host>/realms/<realm>.
+  # This field IS the on/off switch for OIDC enforcement on the default
+  # tenant — empty disables it, set enables it. No separate enable flag;
+  # see README.md for why. See README.md's OIDC section for what's
+  # provider-agnostic here (authentication) vs. not (authorization,
+  # configured below).
+  issuer: ""
+
+auth:
+  # Namespace/Service Kuadrant's own generated EnvoyFilter targets for the
+  # Authorino gRPC check, but omits TLS for — see templates/envoyfilter.yaml.
+  authorinoNamespace: kuadrant-system
+  authorinoService: authorino-authorino-authorization
+  # Raw CEL for the authz AuthPolicy's two authorization rules. Defaults to
+  # Keycloak's resource_access claim shape; override to adapt to a
+  # different OIDC provider's claim shape — see README.md's OIDC section
+  # for the full explanation, available CEL variables, and a worked
+  # non-Keycloak example.
+  toolAccessPredicate: |-
+    ('tool:' + request.headers['x-mcp-toolname']) in
+    (has(auth.identity.resource_access) &&
+     auth.identity.resource_access.exists(p, p == request.headers['x-mcp-servername'])
+     ? auth.identity.resource_access[request.headers['x-mcp-servername']].roles : [])
+  promptAccessPredicate: |-
+    ('prompt:' + request.headers['x-mcp-promptname']) in
+    (has(auth.identity.resource_access) &&
+     auth.identity.resource_access.exists(p, p == request.headers['x-mcp-servername'])
+     ? auth.identity.resource_access[request.headers['x-mcp-servername']].roles : [])
+  # RFC 8693 token exchange (defense-in-depth, Tech Preview path, Keycloak-
+  # specific — not independently verified end-to-end; check Authorino's
+  # logs on the first real request before trusting it silently). Requires,
+  # on the Keycloak side (not created by this chart):
+  #   - clientId.attributes["standard.token.exchange.enabled"] = "true" on
+  #     the exchanging client
+  #   - an oidc-audience-mapper on the CLI client including the exchanging
+  #     client (Keycloak V2 Standard Token Exchange requires this)
+  #   - a Secret named credentialSecretName, in the namespace where
+  #     Connectivity Link/Authorino itself is deployed (kuadrant-system),
+  #     NOT extension.namespace and NOT gateway.namespace — Authorino only
+  #     resolves sharedSecretRef against its own namespace.
+  tokenExchange:
+    enabled: false
+    cacheTtlSeconds: 300
+    credentialSecretName: ""
+    credentialSecretKey: ""
+  # Signed x-mcp-authorized header so tools/list and prompts/list return
+  # only the capabilities the caller's token actually grants, instead of
+  # every tool on every registered server regardless of role (RHCL docs
+  # Ch. 6.3, "Filter revoked tools and prompts from display"). Off by
+  # default. This is a SEPARATE mechanism from toolAccessPredicate/
+  # promptAccessPredicate above: those gate tools/call and prompts/call on
+  # the -mcps listener; this gates what tools/list and prompts/list show on
+  # the mcp listener, which ext_proc never routes through -mcps for list
+  # calls at all.
+  #
+  # Requires a pre-existing ECDSA P-256 keypair this chart deliberately
+  # does NOT generate (Helm has no sprig function to derive an EC public
+  # key from a private key, and the two halves land in different
+  # namespaces by Authorino's own design — see below). Create it once per
+  # tenant:
+  #   openssl ecparam -name prime256v1 -genkey -noout -out private-key.pem
+  #   openssl ec -in private-key.pem -pubout -out public-key.pem
+  #   oc create secret generic <privateKeySecretName> --from-file=key=private-key.pem -n <auth.authorinoNamespace>
+  #   oc create secret generic <publicKeySecretName> --from-file=key=public-key.pem -n <extension.namespace>
+  # See README.md's "Filtering tools/list by authorization" section for
+  # the full walkthrough.
+  filterToolList:
+    enabled: false
+    # Secret (data key "key") holding the PEM private key, in
+    # auth.authorinoNamespace — Authorino only resolves signingKeyRefs
+    # against its OWN namespace, the same limitation documented for
+    # tokenExchange.credentialSecretName above. That namespace is SHARED
+    # across every tenant on this Gateway, so this name must be unique per
+    # tenant — required (no default) for exactly that reason.
+    privateKeySecretName: ""
+    # Secret (data key "key") holding the matching PEM public key, in this
+    # tenant's own extension.namespace (already isolated per tenant, so no
+    # collision risk) — wired into MCPGatewayExtension.spec.trustedHeadersKey.
+    publicKeySecretName: ""
+    # Raw Rego computing the `capabilities` object the signed header
+    # carries, from the same resource_access/tool:/prompt: shape
+    # toolAccessPredicate assumes above — override together with that
+    # field for a non-Keycloak provider. `input.auth...`, not `auth...`:
+    # Authorino's OPA integration passes the whole AuthJSON as `input`,
+    # unlike the CEL predicates above which see `auth` directly.
+    capabilitiesRego: |-
+      allow = true
+      capabilities = {
+        "tools": { server: tools |
+          server := object.keys(input.auth.identity.resource_access)[_]
+          tools := [substring(r, count("tool:"), -1) | r := input.auth.identity.resource_access[server].roles[_]; startswith(r, "tool:")]
+        },
+        "prompts": { server: prompts |
+          server := object.keys(input.auth.identity.resource_access)[_]
+          prompts := [substring(r, count("prompt:"), -1) | r := input.auth.identity.resource_access[server].roles[_]; startswith(r, "prompt:")]
+        }
+      }
+
+# Additional, fully isolated tenants beyond the default above — see
+# README.md for the full model. Each entry requires `name`, `publicHost`,
+# and `extensionNamespace` (Helm `required`); everything else (`enabled`,
+# `oidcIssuer`, `auth.*`) is optional and defaults the same way the
+# top-level fields above do.
+#
+# `extensionNamespace` has no default (unlike this chart's other namespace
+# fields) and must be unique across the default tenant and every other
+# enabled extraTenants[] entry: the MCP Gateway Operator allows only one
+# MCPGatewayExtension per namespace (confirmed live — a second one in the
+# same namespace sits at Ready: False, "conflict: namespace ... already has
+# MCPGatewayExtension ... (only one per namespace allowed)"). The chart
+# fails fast on a missing value or a collision rather than letting that
+# happen live. A matching ReferenceGrant (see templates/referencegrant.yaml)
+# is created automatically for every tenant's extensionNamespace — nothing
+# extra to apply by hand.
+#
+# `port` is REQUIRED whenever `oidcIssuer` is set: that tenant's internal
+# "-mcps" listener has no hostname, so Gateway API's uniqueness rule
+# (port+protocol+hostname) collapses to "port must be unique" across the
+# default tenant (gateway.port) and every other OIDC-enabled extraTenants[]
+# entry. The chart fails fast with a clear error on a collision or a missing
+# port, rather than letting the Gateway API server reject the whole Gateway
+# with a generic "must be unique for each listener" message. Tenants without
+# `oidcIssuer` don't need `port` — they only get the hostname-disambiguated
+# external "-mcp" listener, which has no such constraint.
+#
+# NEVER use `--set` for anything under extraTenants — Helm replaces the
+# whole list item, silently dropping even `name`. Always render from a
+# values file, and list every extra tenant you want kept.
+extraTenants: []
+# - name: owl
+#   enabled: true
+#   publicHost: owl-mcp.apps.<cluster-domain>
+#   extensionNamespace: mcp-gateway-owl   # must differ from mcp-gateway-system (the default tenant's)
+#   oidcIssuer: https://<idp-host>/realms/owl
+#   port: 8081
+#   auth:
+#     tokenExchange:
+#       enabled: false
+#     filterToolList:
+#       enabled: true
+#       privateKeySecretName: mcp-gateway-trusted-headers-private-key-owl   # unique across every tenant
+#       publicKeySecretName: mcp-gateway-trusted-headers-public-key          # extensionNamespace already isolates this
+# # A tenant on a non-Keycloak OIDC provider — see README.md's OIDC section.
+# - name: contoso
+#   publicHost: contoso-mcp.apps.<cluster-domain>
+#   extensionNamespace: mcp-gateway-contoso
+#   oidcIssuer: https://login.contoso-idp.example.com/v2
+#   port: 8082
+#   auth:
+#     toolAccessPredicate: |-
+#       ('tool:' + request.headers['x-mcp-toolname']) in auth.identity.groups
+#     promptAccessPredicate: |-
+#       ('prompt:' + request.headers['x-mcp-promptname']) in auth.identity.groups

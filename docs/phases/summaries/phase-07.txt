@@ -1,0 +1,56 @@
+══════════════════════════════════════════════════════════════
+  Phase 7 — MaaS Multi-Tenant
+══════════════════════════════════════════════════════════════
+
+Goal:     Add one or more additional, fully isolated MaaS tenants
+          (e.g. team-alpha, team-beta) on top of the Phase 6 default
+          tenant — each with its own Gateway, namespace, maas-api
+          instance, and RBAC.
+Time:     ~15-20 min per tenant
+
+Requires: Phase 6 complete (default AITenant Ready, maas-api running)
+
+Architecture:
+  - Config (cluster singleton) -> AITenant -> MaasTenantConfig
+  - Creating an AITenant auto-provisions everything beneath it:
+    tenant namespace, MaasTenantConfig, maas-api-<name> deployment,
+    tenant-admin Role. No manual namespace/CR scaffolding needed.
+  - HARD CONSTRAINT: one dedicated Gateway per AITenant, enforced by
+    the vaitenant.kb.io admission webhook. maas-default-gateway is
+    already claimed by the Phase 6 default tenant.
+
+Pre-flight:
+  - Verify Phase 6 default tenant: oc get aitenant models-as-a-service -n ai-tenants
+  - Confirm gitops/instance/maas/gateway chart's TelemetryPolicy is
+    named {{ .Values.gateway.name }}-telemetry (not hardcoded) —
+    required before deploying a 2nd gateway with telemetry enabled
+  - Ask user: tenant names, admin groups, which models per tenant
+
+Order matters (repeat per tenant):
+  1. Deploy a dedicated Gateway via the Phase 6 helm chart
+     (gitops/instance/maas/gateway, distinct name/subdomain)
+     ⚠ Same chart as Phase 6 — not a hand-written manifest,
+       not LoadBalancer-only (useOpenShiftRoute=true, ClusterIP+Route)
+  2. Create the AITenant CR referencing that Gateway
+     ⚠ Webhook rejects if the Gateway is already claimed
+     → Auto-provisions namespace ai-tenant-<name>, MaasTenantConfig,
+       maas-api-<name>, Role aitenant-<name>-tenant-admin
+  3. Create RoleBinding for tenant admins
+     ⚠ spec.rbac.admins on AITenant is deprecated/ignored — must
+       create the RoleBinding manually
+  4. Deploy/publish a model into the tenant's own namespace
+     (maas.gateway.name/namespace -> tenant's dedicated gateway)
+  5. Create MaaSSubscription + MaaSAuthPolicy in the tenant's
+     own namespace (not models-as-a-service)
+  6. Smoke test: API key + inference through the tenant's own
+     gateway, plus a cross-tenant isolation check (other gateway
+     must reject the same key)
+
+Human gate:
+  - Each tenant's AITenant shows Ready: True
+  - API key creation returns sk-oai-* key (HTTP 201)
+  - Inference through the tenant's own gateway returns HTTP 200
+  - Same key against another tenant's gateway returns 403/404
+
+Guide: docs/phases/07-maas-multi-tenant.md
+══════════════════════════════════════════════════════════════

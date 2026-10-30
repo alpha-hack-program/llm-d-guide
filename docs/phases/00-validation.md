@@ -46,4 +46,4 @@ oc get secret pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfig
 
 **Human gate:** Confirm env vars, region, and that all checks pass before proceeding.
 
-**End of Phase 0:** Stop here and report validation results to the user. Wait for confirmation before proceeding to [Phase 1](01-tls-cert-automation.md).
+**End of Phase 0:** Stop here and report validation results to the user. Wait for confirmation before proceeding to [Phase 1](01-tls-cert-automation/README.md).
