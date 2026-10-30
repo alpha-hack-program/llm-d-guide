@@ -1,0 +1,11 @@
+# Values for GCP deployments.
+# Enables the Google Cloud DNS DNS-01 CredentialsRequest and injects
+# CLOUD_CREDENTIALS_SECRET_NAME into the Subscription's spec.config.env.
+#
+# NOTE: on GCP clusters where CCO runs in Manual mode with Workload Identity
+# Federation (check: `oc get cloudcredential cluster
+# -o jsonpath='{.spec.credentialsMode}'`), this CredentialsRequest is not
+# auto-fulfilled — see docs/phases/01-tls-cert-automation/gcp.md. If you are
+# not planning to use Let's Encrypt via Google Cloud DNS, use
+# values-none.yaml (local-ca) instead, even on GCP.
+cloud: gcp

@@ -3,25 +3,35 @@
 ══════════════════════════════════════════════════════════════
 
 Goal:     Install cert-manager and automate TLS certificate lifecycle.
-Time:     ~15-20 min
-Requires: CLOUD, TLS_ISSUER confirmed
+Time:     ~15-20 min (or ~0 min on managed clusters — see Step 0)
+Requires: CLOUD, TLS_ISSUER confirmed (plus: is this a managed cluster?)
 
 Steps:
-  1. Install cert-manager operator
-     OCP 4.20: helm template | oc apply (retry loop for CRD race)
-     OCP 4.21: use OLMv0 (OLMv1 path available for forward compat)
-  2. Wait for operator ready:
-     OCP 4.20/4.21: CSV Succeeded + 3 pods Ready
-  3a. [letsencrypt] Run ./scripts/validate-cluster-domain.sh
+  0. [Managed clusters — OSD/ROSA, any cloud] Check ingresscontroller/default
+     .spec.defaultCertificate.name — if set, it's already a real public cert.
+     Use it directly, skip the rest of this phase entirely.
+  1. Install cert-manager operator [self-managed clusters]
+     Retry loop handles the two-pass CRD race (CertManager CR not registered
+     until CSV succeeds).
+  2a. [local-ca] Apply cert-manager-local-ca chart (same on every platform)
+      → Inject CA into cluster trust bundle (MANDATORY on self-managed,
+        BLOCKED by SRE webhook on managed OSD/ROSA clusters — use Step 0
+        instead on those)
+  2b. [letsencrypt, AWS] Run ./scripts/validate-cluster-domain.sh
       → STOP and confirm domain with user before proceeding
       → Apply cert-manager-route53 chart
-  3b. [local-ca] Apply cert-manager-local-ca chart
-      → Inject CA into cluster trust bundle (mandatory)
-  4. Wait for certificates Ready=True
+  2c. [letsencrypt, GCP] Google Cloud DNS path — see docs/phases/01-tls-cert-automation/gcp.md
+      (self-managed/Mint-mode CCO only; documented, not live-validated)
+  3. Wait for certificates Ready=True
+
+Cloud-specific guides:
+  docs/phases/01-tls-cert-automation/aws.md
+  docs/phases/01-tls-cert-automation/gcp.md
+  docs/phases/01-tls-cert-automation/baremetal.md
 
 Human gate:
-  - All certificates show READY=True
+  - All certificates show READY=True (or: using the existing managed-cluster cert)
   - Do NOT proceed with any cert showing False or Issuing
 
-Guide: docs/phases/01-tls-cert-automation.md
+Guide: docs/phases/01-tls-cert-automation/README.md
 ══════════════════════════════════════════════════════════════

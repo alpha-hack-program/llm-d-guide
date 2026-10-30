@@ -13,7 +13,7 @@
 # and the smoke test will fail with AUTH_FAILURE / "Missing or empty username header"
 oc get kuadrant kuadrant -n kuadrant-system
 # If Ready: False, restart the Kuadrant operator before proceeding:
-#   oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
+#   oc delete pod -n openshift-operators -l app=kuadrant,control-plane=controller-manager
 #   oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
 oc get pods -n kuadrant-system
 
@@ -40,7 +40,18 @@ helm template gitops/instance/maas/gateway --name-template maas-gateway \
 oc get gateway maas-default-gateway -n openshift-ingress
 ```
 
-> **TLS secret — human gate:** The default `ingress-certs` is the wildcard cert from Phase 1 (cert-manager / Let's Encrypt). For non-cloud or bare-metal installs where this secret does not exist, **stop and ask the user** which TLS secret to use (e.g. `router-certs-default` or a custom cert).
+> **TLS secret — human gate:** The default `ingress-certs` is the wildcard cert from Phase 1
+> (cert-manager / Let's Encrypt / local-ca). **On a managed cluster (OSD/ROSA)**, use the existing
+> public certificate instead — confirmed live, this is the recommended path:
+> `--set tls.secretName="$(oc get ingresscontroller/default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}')"`
+> (see [01-tls-cert-automation/README.md Step 0](01-tls-cert-automation/README.md#step-0--managed-clusters-use-the-existing-public-certificate)).
+> For any other install where `ingress-certs` does not exist, **stop and ask the user** which TLS
+> secret to use. **Do not point `tls.secretName` at a name with no pre-existing secret as a way to
+> "reuse" another cert** (e.g. a bare `router-certs-default` guess) — confirmed live, the chart's
+> Service annotation will make `service-ca-operator` generate a brand-new, internal-only,
+> Service-scoped self-signed cert at that name instead, silently not what was intended. Only use a
+> secret name you've confirmed actually exists and contains the certificate you want
+> (`oc get secret <name> -n openshift-ingress -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -subject -issuer`).
 
 > **Chart change (tenant isolation fix):** `models-as-a-service` and `redhat-ods-applications` used to be hardcoded into every gateway's `allowedRoutes`, regardless of tenant — a real isolation gap once Phase 7 adds more tenant gateways (any default-tenant `HTTPRoute` could attach to another tenant's gateway). The chart now only hardcodes this gateway's own namespace and the shared `redhat-ai-gateway-infra` (needed by every tenant's own `maas-api-route`). For the **default** tenant's gateway only, `models-as-a-service`/`redhat-ods-applications` must now be listed explicitly in `modelNamespaces` as shown above — a Phase 7 tenant's gateway must **not** include them (see [Phase 7](07-maas-multi-tenant.md)).
 
@@ -48,6 +59,12 @@ oc get gateway maas-default-gateway -n openshift-ingress
 
 Deploy PostgreSQL and create the `maas-db-config` secret **before** enabling `modelsAsService`. The `maas-api` pod will not start without this secret. `helm template` skips `lookup`, so the password must be supplied explicitly:
 ```bash
+# The namespace does not exist yet this early (it's normally created when
+# modelsAsService=true reconciles in Step 3, which hasn't happened yet) —
+# confirmed live: `oc apply -n redhat-ai-gateway-infra` fails with
+# "namespaces \"redhat-ai-gateway-infra\" not found" without this:
+oc create namespace redhat-ai-gateway-infra
+
 DB_PASSWORD=$(openssl rand -base64 18 | tr -d '+/=' | head -c 24)
 echo "Save this DB password: ${DB_PASSWORD}"
 helm template gitops/instance/maas/database --name-template maas-database \
@@ -313,10 +330,14 @@ See README §9.2 Step 7 for multi-tier examples with different limits per group.
 
 ### Step 7 — Enable dashboard flags
 
-All four MaaS-related flags must be `true`:
+These MaaS-related flags must be `true`:
 ```bash
+# Do NOT include "maasAuthPolicies" — confirmed live (RHOAI 3.5.0): the API
+# server rejects the patch with "DEPRECATED: spec.dashboardConfig.maasAuthPolicies
+# must be removed or left unchanged" (same deprecation noted in Phase 3's
+# known gotchas — it applies here too, since this is the same CR).
 oc patch odhdashboardconfig odh-dashboard-config -n redhat-ods-applications --type=merge \
-  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"modelAsService":true,"maasAuthPolicies":true,"vLLMDeploymentOnMaaS":true}}}'
+  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"modelAsService":true,"vLLMDeploymentOnMaaS":true}}}'
 oc rollout restart deployment/rhods-dashboard -n redhat-ods-applications
 ```
 
@@ -367,14 +388,14 @@ curl -sk "https://${MAAS_GW}/v1/chat/completions" \
   # Confirm AuthPolicies are Accepted: False:
   oc get authpolicy -A -o custom-columns="NS:.metadata.namespace,NAME:.metadata.name,ACCEPTED:.status.conditions[?(@.type==\"Accepted\")].status"
   # Restart the Kuadrant operator and wait:
-  oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator
+  oc delete pod -n openshift-operators -l app=kuadrant,control-plane=controller-manager
   oc wait kuadrant kuadrant -n kuadrant-system --for=condition=Ready --timeout=5m
   # Retry the smoke test.
   ```
   > **Do NOT patch `maas-api-auth-policy` or `maas-auth-*` AuthPolicies** — they are managed by the maas-controller and any manual patches are overwritten on next reconciliation. The `kubernetesTokenReview.audiences` and TLS config in those policies are correct; only Kuadrant needs a restart to enforce them.
 - `POST /v1/api-keys` returns `500` (exception, not auth failure): Authorino TLS not configured, or the `maas-default-gateway-authn-ssl` EnvoyFilter is missing. The EnvoyFilter is created by `odh-model-controller` (not maas-controller) — restart it to force re-reconciliation: `oc rollout restart deployment/odh-model-controller -n redhat-ods-applications`. See the fallback in Step 4 above.
 - **500 errors on API keys / authorization policies pages** — gateway OCP Route has wrong hostname. Check: `oc get route maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.host}'` must be `maas.<cluster-domain>`. If it shows `maas-default-gateway-openshift-ingress.<cluster-domain>`, re-apply the gateway chart (the chart had a bug where `useOpenShiftRoute=true` used the wrong hostname format). Symptom in `maas-ui` sidecar logs: `statusCode=503 ... invalid character '<'`.
-- Gen AI studio → API keys or Settings → Authorization policies tabs missing in the dashboard: check all MaaS `OdhDashboardConfig` flags (`genAiStudio`, `modelAsService`, `maasAuthPolicies`, `vLLMDeploymentOnMaaS`) — `vLLMDeploymentOnMaaS` is the most commonly missing one.
+- Gen AI studio → API keys or Settings → Authorization policies tabs missing in the dashboard: check the MaaS `OdhDashboardConfig` flags (`genAiStudio`, `modelAsService`, `vLLMDeploymentOnMaaS`) — `vLLMDeploymentOnMaaS` is the most commonly missing one. Do not add `maasAuthPolicies`; it's deprecated and the API server rejects the patch if present.
 - `LLMInferenceService` `HTTPRoutesReady: False` — `NotAllowedByListeners`: model namespace not in `gateway.modelNamespaces`. Re-apply the gateway chart with the correct namespace set.
 - `MaaSAuthPolicy` status loop in controller logs (`"failed to update MaaSAuthPolicy status"`) — harmless controller/CRD version mismatch. Auth and rate limiting work correctly despite this.
 - **EA2 → stable migration (3.4/3.5):** If `maas-controller` or `maas-api` Deployment shows an immutable selector error in the DSC, delete both Deployments and force a DSC reconcile. When upgrading from 3.4 to 3.5, note that the MaaS infrastructure namespace changed from `redhat-ods-applications` to `redhat-ai-gateway-infra` -- stale Deployments in the old namespace should be cleaned up manually.

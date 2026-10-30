@@ -1,0 +1,20 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ocp-ingress
+  namespace: openshift-ingress
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  isCA: false
+  commonName: "apps.{{ .Values.clusterDomain }}"
+  dnsNames:
+  - "apps.{{ .Values.clusterDomain }}"
+  - "*.apps.{{ .Values.clusterDomain }}"
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+    group: cert-manager.io
+  secretName: ingress-certs

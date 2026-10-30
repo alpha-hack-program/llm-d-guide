@@ -43,11 +43,18 @@ oc get pods -n openshift-user-workload-monitoring -w
 ```bash
 oc apply -k gitops/operators/cluster-observability-operator
 
-# The InstallPlan uses Manual approval — approve it:
+# Check whether the InstallPlan needs manual approval before assuming it does —
+# confirmed live (RHOAI 3.5, COO v1.5.3): the InstallPlan was already
+# Approval=Automatic/Approved=true, so no patch was needed. Only patch if a
+# pending, unapproved InstallPlan actually exists:
+oc get installplan -n openshift-cluster-observability-operator
 IP=$(oc get installplan -n openshift-cluster-observability-operator \
   -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}')
-[[ -n "$IP" ]] && oc patch installplan "$IP" -n openshift-cluster-observability-operator \
-  --type=merge -p '{"spec":{"approved":true}}'
+if [[ -n "$IP" ]]; then
+  echo "Pending InstallPlan found: $IP — stop and confirm with the user before approving (see AGENTS.md Constraints)."
+  # oc patch installplan "$IP" -n openshift-cluster-observability-operator \
+  #   --type=merge -p '{"spec":{"approved":true}}'
+fi
 
 # Wait for COO CSV (poll by name — label may not be applied immediately)
 echo "Waiting for COO CSV..."

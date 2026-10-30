@@ -1,8 +1,12 @@
 # AGENTS.md — llm-d-guide Co-pilot Runbook
 
 This file gives assistants (Claude Code, OpenCode, Cursor, and compatible tools) persistent
-context for installing **Red Hat OpenShift AI 3.5** (self-managed) with **llm-d** on
-**OpenShift Container Platform 4.20–4.21** (llm-d requires 4.20+). The canonical, step-by-step manual is [`README.md`](README.md);
+context for installing **Red Hat OpenShift AI 3.5** with **llm-d** on
+**OpenShift Container Platform 4.20+** (llm-d requires 4.20+; confirmed live through 4.22 on
+OpenShift Dedicated/GCP — the OLMv0 operator-install approach holds unchanged). Covers both
+**self-managed** (IPI/UPI) and **managed** (OpenShift Dedicated / ROSA) clusters, on **AWS**,
+**GCP**, or **bare metal / other** — see the cloud-specific guides linked from Phases 1 and 2.
+The canonical, step-by-step manual is [`README.md`](README.md);
 use this runbook for phased execution, wait conditions, and human gates. Work through one phase
 per session. Always tell the assistant which phase you are on and paste any relevant error output
 before asking for help.
@@ -46,20 +50,25 @@ troubleshooting) is in [`docs/reference/`](docs/reference/).
 
 | Variable | Description | Example | Used in |
 |---|---|---|---|
-| `CLOUD` | Is your infrastructure running on AWS? Set `aws` if yes, `none` otherwise. Controls infrastructure features (CredentialsRequest, MachineSets). **Must be confirmed before Phase 1 — do not default.** | `aws` | Phase 1, 2 |
-| `TLS_ISSUER` | TLS certificate issuer: `letsencrypt` (Route53 DNS-01, requires AWS + public DNS) or `local-ca` (local CA chain via cert-manager, works on any platform). **Must be confirmed before Phase 1.** | `letsencrypt` | Phase 1 |
-| `AWS_INSTANCE_TYPE` | GPU instance type | `g5.2xlarge` | Phase 2 |
-| `AWS_INSTANCES_PER_AZ` | GPU nodes per availability zone | `1` | Phase 2 |
+| `CLOUD` | What cloud is your infrastructure running on? `aws`, `gcp`, or `none` (bare metal / other). Controls infrastructure features (CredentialsRequest, MachineSets/machinepools). **Must be confirmed before Phase 1 — do not default.** | `aws`, `gcp`, or `none` | Phase 1, 2 |
+| `MANAGED_CLUSTER` | Is this a managed OpenShift Dedicated / ROSA cluster, or self-managed (IPI/UPI)? Check via `ocm describe cluster <id> \| grep -E 'Product\|HCP'`, or ask. Managed clusters already ship a publicly-trusted default certificate and block several admin-looking actions (trust bundle injection, raw `MachineSet` edits) via SRE admission webhooks — see Phase 1/2 cloud-specific guides. **Must be confirmed before Phase 1.** | `osd`, `rosa`, or `self-managed` | Phase 1, 2 |
+| `TLS_ISSUER` | TLS certificate issuer: `letsencrypt` (Route53 DNS-01 on AWS, or Google Cloud DNS-01 on GCP — both require public DNS and, in practice, a self-managed/Mint-mode CCO cluster) or `local-ca` (local CA chain via cert-manager, works on any platform). **On managed clusters (OSD/ROSA), check for an existing public certificate first (`ingresscontroller/default .spec.defaultCertificate.name`) — this is often already solved with no `TLS_ISSUER` needed at all.** **Must be confirmed before Phase 1.** | `letsencrypt` | Phase 1 |
+| `AWS_INSTANCE_TYPE` | GPU instance type (AWS) | `g5.2xlarge` | Phase 2 |
+| `AWS_INSTANCES_PER_AZ` | GPU nodes per availability zone (AWS) | `1` | Phase 2 |
+| `GCP_GPU_INSTANCE_TYPE` | GPU instance type (GCP) | `g2-standard-4` | Phase 2 |
 | `RHOAI_OLM_PROFILE` | RHOAI **operator** install preset: `stable` (default) = `stable-3.x`; `ea` = `alpha` channel (the `beta` channel is legacy — do not use). Verify current CSV via `packagemanifest` before use. Passed to `helm template ./gitops/operators/rhoai --set olmProfile=...` | `stable` | Phase 3 |
 | `HF_TOKEN` | HuggingFace token for gated models | `hf_...` | Phase 5 |
 | `GATEWAY_NAME` | Name for the llm-d gateway | `openshift-ai-inference` | Phase 5, 6 |
 | `PROJECT` | Namespace for llm-d workloads | `llm-d-demo` | Phase 5, 6 |
 
-> **Critical — confirm `CLOUD` and `TLS_ISSUER` before Phase 1:**
-> 1. Ask: "Is your infrastructure running on AWS?" → set `CLOUD=aws` or `CLOUD=none`. This controls CredentialsRequest creation and MachineSet provisioning — the wrong value causes silent mis-configuration.
-> 2. Ask: "Do you want Let's Encrypt (requires Route53 access) or a local CA for TLS?" → set `TLS_ISSUER=letsencrypt` or `TLS_ISSUER=local-ca`. A local CA works on any platform, including AWS — useful for labs, demos, or clusters without public DNS access. Let's Encrypt requires `CLOUD=aws`.
+> **Critical — confirm `CLOUD`, `MANAGED_CLUSTER`, and `TLS_ISSUER` before Phase 1:**
+> 1. Ask: "Is your infrastructure running on AWS, GCP, or neither?" → set `CLOUD=aws`, `CLOUD=gcp`, or `CLOUD=none`. This controls CredentialsRequest creation and MachineSet/machinepool provisioning — the wrong value causes silent mis-configuration.
+> 2. Check (or ask) whether the cluster is managed (OpenShift Dedicated / ROSA) or self-managed — `ocm describe cluster <id>` if `ocm` is available, otherwise ask directly. This changes the Phase 1 and Phase 2 approach significantly (see [docs/phases/01-tls-cert-automation/gcp.md](docs/phases/01-tls-cert-automation/gcp.md) for the full writeup, confirmed live against an OpenShift Dedicated GCP cluster).
+> 3. **On a managed cluster, check for an existing public certificate first:** `oc get ingresscontroller/default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}'`. If set, this is usually a Red Hat-provisioned, publicly-trusted certificate already — Phase 1 may need no TLS_ISSUER decision at all. See [docs/phases/01-tls-cert-automation/README.md Step 0](docs/phases/01-tls-cert-automation/README.md#step-0--managed-clusters-use-the-existing-public-certificate).
+> 4. Otherwise ask: "Do you want Let's Encrypt or a local CA for TLS?" → set `TLS_ISSUER=letsencrypt` or `TLS_ISSUER=local-ca`. A local CA works on any platform — useful for labs, demos, or clusters without public DNS access. Let's Encrypt requires `CLOUD=aws` or `CLOUD=gcp` (with extra caveats on GCP — see the cloud-specific guide) and, on managed clusters, additional out-of-band Workload Identity/`ccoctl` bootstrapping not covered by this guide.
+> 5. **Note:** on managed clusters (OSD/ROSA), the local-ca "inject into cluster trust bundle" step is blocked by SRE admission webhooks even for admin-equivalent users — confirmed live. Don't attempt it; use the existing public certificate (step 3) instead.
 >
-> **Do not default or assume either variable — ask the user.**
+> **Do not default or assume any of these — ask the user (or check the live cluster) explicitly.**
 
 ---
 
@@ -68,8 +77,8 @@ troubleshooting) is in [`docs/reference/`](docs/reference/).
 | Phase | Name | Guide | Approx. time | Human gate |
 |---|---|---|---|---|
 | 0 | Cluster validation | [docs/phases/00-validation.md](docs/phases/00-validation.md) | 5 min | Confirm env vars + StorageClass |
-| 1 | TLS Certificate Automation | [docs/phases/01-tls-cert-automation.md](docs/phases/01-tls-cert-automation.md) | 15–20 min | Verify certs `READY=True` |
-| 2 | GPU nodes + NFD + NVIDIA GPU Operator | [docs/phases/02-gpu-nodes.md](docs/phases/02-gpu-nodes.md) | 20–40 min | Confirm GPU nodes are schedulable |
+| 1 | TLS Certificate Automation | [docs/phases/01-tls-cert-automation/README.md](docs/phases/01-tls-cert-automation/README.md) (+ [aws.md](docs/phases/01-tls-cert-automation/aws.md) / [gcp.md](docs/phases/01-tls-cert-automation/gcp.md) / [baremetal.md](docs/phases/01-tls-cert-automation/baremetal.md)) | 15–20 min (often ~0 min on managed clusters) | Verify certs `READY=True`, or confirm existing managed-cluster cert |
+| 2 | GPU nodes + NFD + NVIDIA GPU Operator | [docs/phases/02-gpu-nodes/README.md](docs/phases/02-gpu-nodes/README.md) (+ [aws.md](docs/phases/02-gpu-nodes/aws.md) / [gcp.md](docs/phases/02-gpu-nodes/gcp.md) / [baremetal.md](docs/phases/02-gpu-nodes/baremetal.md)) | 20–40 min | Confirm GPU nodes are schedulable |
 | 3 | Core operators + RHOAI | [docs/phases/03-operators-rhoai.md](docs/phases/03-operators-rhoai.md) | 20–30 min | Approve InstallPlans; CSVs `Succeeded` |
 | 4 | Monitoring stack | [docs/phases/04-monitoring.md](docs/phases/04-monitoring.md) | 10 min | Optional sign-off |
 | 5 | llm-d Quick Start | [docs/phases/05-llmd-quickstart.md](docs/phases/05-llmd-quickstart.md) | 15–20 min | Review curl test output |
@@ -87,18 +96,19 @@ Confirm the cluster is ready: OCP 4.20–4.21 (llm-d requires 4.20+), cluster ad
 **Full guide:** [docs/phases/00-validation.md](docs/phases/00-validation.md)
 
 ### Phase 1 — TLS Certificate Automation
-Install cert-manager operator and automate TLS certificate lifecycle.
+Install cert-manager operator and automate TLS certificate lifecycle — **or skip most of this on a managed cluster**.
 **Critical:**
-- Confirm `CLOUD` and `TLS_ISSUER` before applying (see Environment Variables above). Use OLMv0 on both OCP 4.20 and 4.21 (the chart also supports `--set olmVersion=v1` for forward compatibility when the OCP console supports OLMv1). First `helm template | oc apply` will fail on the `CertManager` CR — wait for the operator CSV to reach `Succeeded`, then re-run.
-- For `TLS_ISSUER=letsencrypt` (requires `CLOUD=aws`): run `./scripts/validate-cluster-domain.sh` (mandatory) and **stop to confirm the extracted domain with the user** before applying the cert-manager-route53 chart — a wrong domain causes silent Let's Encrypt failures.
-- For `TLS_ISSUER=local-ca` (works on any platform, including AWS): follow the **local CA** path (Step 2 Alternative in the Phase 1 guide) — it creates a local CA chain via cert-manager that issues properly signed certificates. After applying, the CA must be injected into the cluster trust bundle (`user-ca-bundle` ConfigMap + Proxy patch). This is mandatory for MaaS dashboard compatibility.
-- The human gate requires all certificates to show `READY=True` in the verify command output — `Issuing` means the cert is not done yet; wait until `Ready`.
-**Full guide:** [docs/phases/01-tls-cert-automation.md](docs/phases/01-tls-cert-automation.md)
+- **First, on any cluster, check for an existing public certificate:** `oc get ingresscontroller/default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}'`. Confirmed live on OpenShift Dedicated (GCP): this is already a Let's Encrypt-issued, publicly-trusted wildcard cert for `*.apps.<domain>`/`api.<domain>` — no cert-manager needed at all. Use this secret name directly as `tls.secretName` in every Gateway chart (Phases 5, 6, 8) and skip the rest of Phase 1.
+- If no existing public cert (self-managed/IPI clusters, or the user wants automated issuance for other reasons): confirm `CLOUD` (`aws`/`gcp`/`none`) and `TLS_ISSUER` before applying. Use OLMv0 on both OCP 4.20 and 4.21+. First `helm template | oc apply` will fail on the `CertManager` CR — wait for the operator CSV to reach `Succeeded`, then re-run.
+- For `TLS_ISSUER=letsencrypt`: AWS uses Route53 DNS-01 (requires `./scripts/validate-cluster-domain.sh`, mandatory, then **stop to confirm the extracted domain with the user**); GCP uses Google Cloud DNS DNS-01 (documented, not live-validated this session — see [gcp.md](docs/phases/01-tls-cert-automation/gcp.md)), and generally only works smoothly with a self-managed/Mint-mode CCO cluster.
+- For `TLS_ISSUER=local-ca` (works on any platform): the `Certificate` CRs apply fine everywhere, but the mandatory trust-bundle injection step (`user-ca-bundle` ConfigMap + `proxy/cluster` patch) is **blocked by SRE admission webhooks on managed OSD/ROSA clusters, confirmed live** — `Prevented from accessing Red Hat managed resources`, regardless of RBAC. On managed clusters, use the existing public certificate instead (see above); local-ca's trust-bundle step is only reliably usable on self-managed clusters.
+- The human gate requires all certificates to show `READY=True` in the verify command output — `Issuing` means the cert is not done yet; wait until `Ready`. (Or, on a managed cluster using the existing public cert: no certificates to wait on at all.)
+**Full guide:** [docs/phases/01-tls-cert-automation/README.md](docs/phases/01-tls-cert-automation/README.md) ([aws.md](docs/phases/01-tls-cert-automation/aws.md) | [gcp.md](docs/phases/01-tls-cert-automation/gcp.md) | [baremetal.md](docs/phases/01-tls-cert-automation/baremetal.md))
 
 ### Phase 2 — GPU Nodes + NFD + NVIDIA GPU Operator
 Add GPU worker nodes and install hardware detection and driver stack.
-**Critical:** Ask the user how many AZs (3 for production, 1 for testing). ClusterPolicy webhook may reject the CR if NFD labels aren't present yet — apply NFD first. **NFD and NVIDIA bundles do not support AllNamespaces install mode** — the `install.sh` scripts always use OLMv0 regardless of OCP version. Wait for CSV `Succeeded` on both 4.20 and 4.21+.
-**Full guide:** [docs/phases/02-gpu-nodes.md](docs/phases/02-gpu-nodes.md)
+**Critical:** Ask the user how many AZs (3 for production, 1 for testing). GPU node provisioning is cloud-specific: AWS uses raw `MachineSet`s (self-managed IPI chart in this repo); GCP uses `ocm create machinepool` on managed OSD/ROSA clusters (the supported customer path there — confirmed live via `ocm` CLI) or a raw `GCPMachineProviderSpec` `MachineSet` on self-managed IPI; bare metal labels/taints already-joined physical nodes. NFD and NVIDIA GPU Operator install identically on every platform and were confirmed live to install and reach `Succeeded` even with **zero GPU nodes present** — the `ClusterPolicy` CR also reports `ready` trivially in that case (its DaemonSets just have zero desired replicas). ClusterPolicy webhook may reject the CR if NFD labels aren't present yet — apply NFD first. **NFD and NVIDIA bundles do not support AllNamespaces install mode** — the `install.sh` scripts always use OLMv0 regardless of OCP version. Wait for CSV `Succeeded` on both 4.20 and 4.21+.
+**Full guide:** [docs/phases/02-gpu-nodes/README.md](docs/phases/02-gpu-nodes/README.md) ([aws.md](docs/phases/02-gpu-nodes/aws.md) | [gcp.md](docs/phases/02-gpu-nodes/gcp.md) | [baremetal.md](docs/phases/02-gpu-nodes/baremetal.md))
 
 ### Phase 3 — Core Operators + RHOAI
 Install Connectivity Link (RHCL 1.3.5+), LeaderWorkerSet, **monitoring operators (Tempo, OpenTelemetry)**, RHOAI, and TrustyAI, then configure the DataScienceCluster.

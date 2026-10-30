@@ -128,15 +128,36 @@ done
 ```bash
 # a) Tempo Operator (distributed tracing) — always OLMv0
 oc apply -k gitops/operators/tempo-operator
-oc get csv -n openshift-tempo-operator -w | grep -E "tempo"
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
-  -n openshift-tempo-operator -l operators.coreos.com/tempo-product.openshift-tempo-operator= --timeout=300s
+
+# Wait for Tempo CSV (poll by name — confirmed live, the label selector
+# below fails immediately with "no matching resources found" because the
+# label is not applied until the CSV is further along):
+#   oc wait ... -l operators.coreos.com/tempo-product.openshift-tempo-operator=
+echo "Waiting for Tempo CSV..."
+for i in $(seq 1 60); do
+  CSV=$(oc get csv -n openshift-tempo-operator -o name 2>/dev/null | grep tempo || true)
+  if [[ -n "$CSV" ]]; then
+    echo "Found: $CSV"
+    oc wait --for=jsonpath='{.status.phase}'=Succeeded $CSV -n openshift-tempo-operator --timeout=300s
+    break
+  fi
+  sleep 5
+done
 
 # b) OpenTelemetry Operator — always OLMv0
 oc apply -k gitops/operators/opentelemetry-operator
-oc get csv -n openshift-opentelemetry-operator -w | grep -E "opentelemetry"
-oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
-  -n openshift-opentelemetry-operator -l operators.coreos.com/opentelemetry-product.openshift-opentelemetry-operator= --timeout=300s
+
+# Wait for OpenTelemetry CSV (poll by name — same label-selector gotcha as above)
+echo "Waiting for OpenTelemetry CSV..."
+for i in $(seq 1 60); do
+  CSV=$(oc get csv -n openshift-opentelemetry-operator -o name 2>/dev/null | grep opentelemetry || true)
+  if [[ -n "$CSV" ]]; then
+    echo "Found: $CSV"
+    oc wait --for=jsonpath='{.status.phase}'=Succeeded $CSV -n openshift-opentelemetry-operator --timeout=300s
+    break
+  fi
+  sleep 5
+done
 
 # Wait for CRD
 oc wait --for=condition=Established crd/instrumentations.opentelemetry.io --timeout=120s
@@ -405,7 +426,7 @@ oc wait --for=jsonpath='{.status.phase}'=Succeeded csv -n grafana-operator \
 - **Connectivity Link install location:** The RHCL operator subscription is in `openshift-operators` (all-namespaces mode), NOT in `kuadrant-system`. The `kuadrant-system` namespace is created by the `Kuadrant` CR (`gitops/instance/maas/connectivity-link`) — it does not exist before that CR is applied.
 - Apply connectivity-link first — Authorino must be running before RHOAI configures authentication.
 - After the RHCL operator is ready, create the Kuadrant CR: `helm template gitops/instance/maas/connectivity-link --name-template maas-connectivity-link | oc apply -f -`. Without this CR, Authorino and Limitador pods are not deployed and MaaS auth/rate-limiting is silently unenforced.
-- **Kuadrant CR `Ready: False` — "istio / envoy gateway not installed"** — the built-in Gateway API controller is sufficient. The Kuadrant operator sometimes fails to detect it on first start. Fix: restart the operator pod (`oc delete pod -n openshift-operators -l app.kubernetes.io/name=kuadrant-operator`) and wait for `Ready: True`. Do NOT search the marketplace or install any gateway operator.
+- **Kuadrant CR `Ready: False` — "istio / envoy gateway not installed"** — the built-in Gateway API controller is sufficient. The Kuadrant operator sometimes fails to detect it on first start. Fix: restart the operator pod (`oc delete pod -n openshift-operators -l app=kuadrant,control-plane=controller-manager`) and wait for `Ready: True`. Do NOT search the marketplace or install any gateway operator.
 - **`modelsAsService` must be `false` during Phase 3.** The `maas-api` pod requires both the MaaS gateway AND the `maas-db-config` database secret to exist before it can start. Enabling it before Phase 6 Step 4 (after gateway and database are ready) leaves the DataScienceCluster `Not Ready (modelsasservice)` with no maas-api pod. The default in `values.yaml` is already `false`; do not override it to `true` here. Enable it in Phase 6 Step 4 by re-applying the chart.
 - `helm template rhoai | oc apply` may fail if CRDs aren't established yet. The wait commands above prevent this, but re-run them if you hit `resource mapping not found`.
 - `helm template rhoai | oc apply` may also fail on `OdhDashboardConfig` and `MLflow` on the first pass — these CRDs are registered only after the Dashboard and MLflow components initialise. Wait for `oc wait --for=condition=Established crd/odhdashboardconfigs.opendatahub.io` and re-run.
