@@ -9,7 +9,7 @@
 | **Cluster Observability Operator (COO)** | Required | Required | Perses dashboards in OCP console and RHOAI dashboard monitoring drawer. Version pinned to 1.4.0 for RHOAI 3.4.1 compatibility. |
 | **Red Hat Build of Kueue** | Not required | Required | Do NOT install for llm-d-only setups — causes namespace label conflicts |
 | **NFD + NVIDIA GPU Operator** | Required | Required | GPU node detection and drivers |
-| **cert-manager** (Operator for Red Hat OpenShift) | Recommended | Recommended | Automates TLS for RHOAI, llm-d, OTel, and related components; manual certs are valid if you manage them yourself |
+| **cert-manager** (Operator for Red Hat OpenShift) | **Required** | **Required** | **The bare operator (CRDs/controller) is a hard dependency of `LeaderWorkerSetOperator`/KServe Wide-EP — confirmed live, independent of `TLS_ISSUER` and managed/self-managed status.** Install it even on managed clusters that skip the rest of Phase 1's TLS automation, with `--set issueCerts=false` (`cloud` stays truthful to the actual platform; `issueCerts=false` is what suppresses `Issuer`/`Certificate`/CCO-CredentialsRequest involvement). Separately, setting `issueCerts=true` with the matching `cloud` lets it also automate ingress/Gateway TLS for RHOAI, llm-d, and related components on self-managed clusters — manual certs are valid there if you manage them yourself, but the operator itself must still be present regardless. |
 | **Grafana Operator** | Optional | Optional | Custom Grafana dashboards. COO provides Perses dashboards which are sufficient for most use cases. |
 
 > **Kueue warning:** Installing the Kueue operator (even with `managementState: Removed` in the DSC)

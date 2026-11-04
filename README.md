@@ -196,17 +196,20 @@ RHOAI 3.5 requires several operators installed **before** creating the DataScien
 > - [Phase 3 — Core Operators + RHOAI](docs/phases/03-operators-rhoai.md)
 > - [Phase 4 — Monitoring](docs/phases/04-monitoring.md)
 
-> **Note on cert-manager:** The cert-manager Operator for Red Hat OpenShift is recommended for automating TLS certificate lifecycle across RHOAI, llm-d, OpenTelemetry, and Llama Stack. It is not a hard requirement — you can provide manually generated certificates wherever TLS is needed. That said, several components document cert-manager as a dependency in their official guides, making it the path of least resistance for most deployments.
+> **Note on cert-manager:** The cert-manager Operator for Red Hat OpenShift is recommended for automating TLS certificate lifecycle across RHOAI, llm-d, OpenTelemetry, and Llama Stack — manually generated certificates are valid wherever TLS is needed instead. **However, the bare operator itself (its CRDs/controller) is a hard requirement regardless** — confirmed live, `LeaderWorkerSetOperator` (installed in Phase 3) depends on it being present even when you never ask it to issue a single certificate. Install it everywhere with `issueCerts=false` (no `Issuer`/`Certificate`/CCO involvement) unless you specifically want its automated Let's Encrypt flow, in which case set `issueCerts=true`.
 
 > **Note on Service Mesh:** Do **not** install OpenShift Service Mesh 2.x under any circumstances. It is not supported in RHOAI 3.x and its CRDs conflict with the llm-d gateway component. Service Mesh 3.x is only required if you plan to deploy the **Llama Stack Operator** — it is **not** needed for base RHOAI or llm-d.
 
 ### 3.1 Cert-Manager Operator and Let's Encrypt Certificate Issuer
 
-> **AWS credential flow (IRSA):** On AWS, the cert-manager chart (`cloud=aws`) creates a `CredentialsRequest` in `openshift-cloud-credential-operator`. The OpenShift Cloud Credential Operator (CCO) reads this request and automatically provisions a scoped IAM credential into an `aws-creds` Secret in the `cert-manager` namespace. The Secret contains `aws_access_key_id` and `aws_secret_access_key` entries tied to a policy that allows only the Route53 actions needed for DNS-01 challenge solving (`route53:GetChange`, `ChangeResourceRecordSets`, `ListResourceRecordSets`, `ListHostedZonesByName`). No manual AWS credential input is required — CCO handles the full lifecycle. Verify the secret was provisioned: `oc get secret aws-creds -n cert-manager`.
+> **AWS credential flow (IRSA):** On AWS, the cert-manager chart (`cloud=aws`, `issueCerts=true`) creates a `CredentialsRequest` in `openshift-cloud-credential-operator`. The OpenShift Cloud Credential Operator (CCO) reads this request and automatically provisions a scoped IAM credential into an `aws-creds` Secret in the `cert-manager` namespace. The Secret contains `aws_access_key_id` and `aws_secret_access_key` entries tied to a policy that allows only the Route53 actions needed for DNS-01 challenge solving (`route53:GetChange`, `ChangeResourceRecordSets`, `ListResourceRecordSets`, `ListHostedZonesByName`). No manual AWS credential input is required — CCO handles the full lifecycle. Verify the secret was provisioned: `oc get secret aws-creds -n cert-manager`.
 
 The chart deploys the `cert-manager-operator` and `cert-manager` namespaces, the OLM Subscription, the `CertManager` cluster configuration, monitoring RBAC and a `ServiceMonitor`, and (on AWS) a `CredentialsRequest` for Route53 access.
 
-Set `CLOUD` to **aws**, **gcp**, or **none** for bare metal / other.
+Set `CLOUD` to **aws**, **gcp**, or **none** for bare metal / other, and `issueCerts` to **true** only
+if using this operator's automated Let's Encrypt flow — **false** on managed clusters or when an
+existing/local-ca certificate is already in place (the operator still installs either way; this
+only gates whether it receives cloud DNS-01 credentials).
 
 > **Note (two-pass apply):** The first `helm template | oc apply` will fail on the `CertManager` CR with `no matches for kind "CertManager"` because the operator CRD is not registered until the CSV reaches `Succeeded`. This is expected. Wait for the CSV, then re-run — it applies cleanly on the second pass.
 

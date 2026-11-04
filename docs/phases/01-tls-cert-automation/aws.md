@@ -10,10 +10,11 @@ managed cluster (ROSA), check
 [the README's managed-cluster note](README.md#step-0--managed-clusters-use-the-existing-public-certificate)
 first — you likely don't need this at all.
 
-Set `cloud=aws` when installing the cert-manager operator (README Step 1):
+Set `cloud=aws` and `issueCerts=true` when installing the cert-manager operator (README Step 1):
 
 ```bash
 CLOUD=aws
+ISSUE_CERTS=true
 ```
 
 This adds the `CLOUD_CREDENTIALS_SECRET_NAME=aws-creds` env var to the operator Subscription and

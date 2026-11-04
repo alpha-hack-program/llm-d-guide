@@ -3,7 +3,21 @@
 # olmVersion: OLM install method — "v0" (Subscription, OCP 4.20) or "v1" (ClusterExtension, OCP 4.21+)
 olmVersion: v0
 
-# cloud: target cloud provider.
+# issueCerts: should this cert-manager install actually be wired up to issue
+# publicly-trusted certificates via an ACME DNS-01 challenge against the
+# chosen cloud's DNS service (Route53 / Google Cloud DNS)? Default false —
+# the operator still installs fully (CRDs, controller, webhook) either way;
+# this only gates whether it receives cloud IAM credentials to act on.
+# Set to true for the self-managed Let's Encrypt flow (TLS_ISSUER=letsencrypt).
+# Leave false when certs are already handled elsewhere — e.g. a managed
+# cluster's own existing public certificate (see
+# docs/phases/01-tls-cert-automation/README.md Step 0), local-ca, or when
+# this install only exists to satisfy another operator's dependency on
+# cert-manager being present (LeaderWorkerSetOperator — see
+# docs/phases/03-operators-rhoai.md Step 2).
+issueCerts: false
+
+# cloud: target cloud provider — only acted on when issueCerts: true above.
 # Supported values: "aws", "gcp", "none"
 # - "aws"  — adds CLOUD_CREDENTIALS_SECRET_NAME env var and deploys the
 #             CredentialsRequest for Route53 DNS-01 challenge resolution.
@@ -13,7 +27,8 @@ olmVersion: v0
 #             clusters (the OpenShift Dedicated / ROSA-style default), this
 #             CredentialsRequest is NOT auto-fulfilled by CCO — see
 #             docs/phases/01-tls-cert-automation/gcp.md. For those clusters,
-#             TLS_ISSUER=local-ca ("none" below) is the recommended path and
-#             requires no cloud credentials at all.
-# - "none" — bare-metal / on-premise / local-ca; no cloud credentials required.
+#             local-ca or an existing managed-cluster cert is the recommended
+#             path — set issueCerts: false instead (cloud can stay truthful).
+# - "none" — bare-metal / on-premise; no cloud credentials possible regardless
+#             of issueCerts.
 cloud: none

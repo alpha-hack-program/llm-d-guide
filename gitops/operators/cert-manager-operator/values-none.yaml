@@ -1,3 +1,11 @@
-# Values for bare-metal / on-premise deployments.
-# No cloud credentials or CredentialsRequest are created.
+# Values for: bare-metal / on-premise deployments, local-ca, OR a managed
+# cluster (OSD/ROSA) that already has a real public certificate and just
+# needs the bare operator installed (e.g. to satisfy LeaderWorkerSetOperator's
+# dependency — see docs/phases/03-operators-rhoai.md Step 2).
+# No cloud credentials or CredentialsRequest are created either way.
+#
+# On an actual AWS/GCP cluster using this file, override cloud to match the
+# truth (--set cloud=gcp) — issueCerts staying false is what matters here,
+# not cloud.
+issueCerts: false
 cloud: none

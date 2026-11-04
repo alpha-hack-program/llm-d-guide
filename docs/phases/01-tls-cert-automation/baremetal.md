@@ -6,10 +6,11 @@ Bare metal and other non-cloud platforms have no DNS-01 provider available in th
 (no Route53, no Google Cloud DNS equivalent), so **Let's Encrypt is not an option** —
 `TLS_ISSUER=local-ca` is the only path.
 
-Set `cloud=none` when installing the cert-manager operator (README Step 1):
+Set `cloud=none` and `issueCerts=false` when installing the cert-manager operator (README Step 1):
 
 ```bash
 CLOUD=none
+ISSUE_CERTS=false
 ```
 
 This installs the operator with no `CredentialsRequest` and no cloud credentials at all.

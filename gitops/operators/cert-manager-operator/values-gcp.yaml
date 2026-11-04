@@ -1,4 +1,4 @@
-# Values for GCP deployments.
+# Values for GCP deployments using the self-managed Let's Encrypt flow.
 # Enables the Google Cloud DNS DNS-01 CredentialsRequest and injects
 # CLOUD_CREDENTIALS_SECRET_NAME into the Subscription's spec.config.env.
 #
@@ -6,6 +6,9 @@
 # Federation (check: `oc get cloudcredential cluster
 # -o jsonpath='{.spec.credentialsMode}'`), this CredentialsRequest is not
 # auto-fulfilled — see docs/phases/01-tls-cert-automation/gcp.md. If you are
-# not planning to use Let's Encrypt via Google Cloud DNS, use
-# values-none.yaml (local-ca) instead, even on GCP.
+# not planning to use Let's Encrypt via Google Cloud DNS (e.g. a managed
+# OSD/GCP cluster using its existing public cert, or local-ca), use
+# values-none.yaml instead — cloud can stay "gcp" there, only issueCerts
+# needs to be false.
+issueCerts: true
 cloud: gcp

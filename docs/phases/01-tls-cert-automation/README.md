@@ -25,14 +25,25 @@
 > OpenShift Dedicated on GCP cluster: these clusters already ship a **publicly-trusted Let's
 > Encrypt wildcard certificate** for `*.apps.<cluster-domain>` and `api.<cluster-domain>`,
 > referenced by `ingresscontroller/default .spec.defaultCertificate.name`. This is unrelated to
-> `TLS_ISSUER`/cert-manager entirely — it exists before Phase 1 even starts. In most cases you do
-> **not** need cert-manager, local-ca, or Let's Encrypt DIY at all on a managed cluster — skip
-> straight to [Step 0 below](#step-0--managed-clusters-use-the-existing-public-certificate). Also
-> be aware that OSD/ROSA's `sre-regular-user-validation` admission webhook blocks customer writes
-> to `configmaps` in `openshift-config`, `proxy/cluster`, `ingresscontroller/default`, and
+> `TLS_ISSUER`/cert-manager entirely — it exists before Phase 1 even starts. You do **not** need
+> local-ca, Let's Encrypt DIY, or any cert-manager `Issuer`/`Certificate` for TLS on a managed
+> cluster — skip straight to [Step 0 below](#step-0--managed-clusters-use-the-existing-public-certificate).
+> Also be aware that OSD/ROSA's `sre-regular-user-validation` admission webhook blocks customer
+> writes to `configmaps` in `openshift-config`, `proxy/cluster`, `ingresscontroller/default`, and
 > `machine.openshift.io` resources — even for users with `cluster-admin`-equivalent RBAC. This
 > makes the local-ca "inject into cluster trust bundle" step (below) **impossible** on managed
 > clusters; see [gcp.md](gcp.md) for the full writeup and the tested workaround.
+>
+> **But still install the bare cert-manager *operator*, even on managed clusters.** This is
+> unrelated to TLS/ingress certs — confirmed live (RHOAI 3.5, OSD/GCP): `LeaderWorkerSetOperator`
+> hard-requires the cert-manager operator's CRDs/controller to be present (for its own internal
+> webhook certs) before it reaches `Available`, and KServe's `LLMInferenceServiceWideEPDependencies`
+> condition stays blocked on `LeaderWorkerSetOperator` until it does — this surfaces in Phase 3
+> Step 2, not here, which is why it's easy to miss. Managed clusters still need Phase 1 Step 1
+> below, run with `--set cloud=${CLOUD} --set issueCerts=false` (`cloud` stays truthful to the
+> actual platform; `issueCerts=false` is what actually suppresses `CredentialsRequest`/CCO
+> involvement, `Issuer`, and `Certificate` — just the bare operator gets installed): do not skip
+> Step 1 even when skipping everything else in this phase.
 
 Do NOT pass `--set cloud=...` without an explicit answer from the user. Let's Encrypt requires
 `CLOUD=aws` or `CLOUD=gcp` (with extra caveats — see the cloud-specific guide); it is not available
@@ -67,12 +78,17 @@ oc get secret "${REAL_CERT_SECRET}" -n openshift-ingress \
 If `defaultCertificate.name` is empty, the cluster does not have a pre-provisioned public
 certificate — fall through to Step 1 (self-managed flow) instead.
 
-**Human gate:** The certificate's issuer must be a real public CA. If it is, Phase 1 is
-effectively **done** — do not install cert-manager unless the user specifically wants automated
-certificate issuance for other, unrelated purposes. Record `REAL_CERT_SECRET` for Phases 5, 6, and
-8 (`tls.secretName=${REAL_CERT_SECRET}` on every Gateway chart, all in the `openshift-ingress`
-namespace already, so no `ReferenceGrant` is needed). Proceed directly to
-[Phase 2](../02-gpu-nodes/README.md).
+**Human gate:** The certificate's issuer must be a real public CA. If it is, the TLS-automation
+part of Phase 1 is **done** — do not install an `Issuer`/`Certificate` or do local-ca trust-bundle
+injection. **Still run Step 1 below with `--set cloud=${CLOUD} --set issueCerts=false`** (`cloud`
+stays truthful to the actual platform; `issueCerts=false` is what skips `Issuer`, `Certificate`,
+and CCO involvement) to install the bare cert-manager operator — `LeaderWorkerSetOperator`
+(Phase 3 Step 2) requires it regardless of managed/self-managed status; skipping it blocks
+KServe's Wide-EP dependency condition and the `LeaderWorkerSetOperator` CR shows
+`Degraded: True (MissingDependency)`. Record `REAL_CERT_SECRET` for Phases 5, 6, and 8
+(`tls.secretName=${REAL_CERT_SECRET}` on every Gateway chart, all in the `openshift-ingress`
+namespace already, so no `ReferenceGrant` is needed). Proceed to Step 1 (cert-manager operator
+only), then [Phase 2](../02-gpu-nodes/README.md).
 
 > **Gotcha — do not set `tls.secretName` to a name that doesn't already exist as a real secret**
 > (e.g. `router-certs-default`) expecting it to "reuse" an existing cert. Confirmed live: the
@@ -90,12 +106,27 @@ namespace already, so no `ReferenceGrant` is needed). Proceed directly to
 
 ---
 
-### Step 1 — cert-manager Operator (self-managed clusters only)
+### Step 1 — cert-manager Operator (ALL clusters, including managed)
 
-Set `CLOUD` to **aws**, **gcp**, or **none**:
+The chart takes two independent values: `cloud` (the actual platform — `aws`/`gcp`/`none`, kept
+truthful) and `issueCerts` (`true`/`false` — whether this install should actually be wired up to
+request publicly-trusted certs via ACME DNS-01 against that cloud's DNS service, or just install
+the bare operator). Only set `issueCerts=true` for the self-managed Let's Encrypt flow below.
+
+> **Managed clusters (OSD/ROSA):** run this step too, with `issueCerts=false` and `cloud` set to
+> the cluster's real platform — you're installing only the bare operator (its CRDs/controller),
+> not configuring an `Issuer` or `Certificate` for ingress TLS (that part is correctly skipped per
+> Step 0 above). `issueCerts=false` creates zero `CredentialsRequest`/CCO involvement regardless of
+> `cloud`. This is required because `LeaderWorkerSetOperator` (Phase 3 Step 2) depends on the
+> cert-manager operator being present, independent of TLS_ISSUER or managed/self-managed status —
+> confirmed live.
+
+Set `CLOUD` to **aws**, **gcp**, or **none**, and `ISSUE_CERTS` to **true** only if doing the
+self-managed Let's Encrypt flow via Issuer/Certificate (Step 2 below) — otherwise **false**:
 
 ```bash
-CLOUD=aws   # or "gcp", or "none" for bare metal / other
+CLOUD=aws         # or "gcp", or "none" for bare metal / other
+ISSUE_CERTS=true  # "false" for managed clusters, local-ca, or bare-operator-only installs
 ```
 
 Install the operator (retry loop handles the two-pass CRD race):
@@ -103,7 +134,7 @@ Install the operator (retry loop handles the two-pass CRD race):
 ```bash
 for i in $(seq 1 60); do
   if helm template gitops/operators/cert-manager-operator \
-       --set cloud=${CLOUD} --name-template cert-manager | oc apply -f -; then
+       --set cloud=${CLOUD} --set issueCerts=${ISSUE_CERTS} --name-template cert-manager | oc apply -f -; then
     break
   fi
   [[ $i -eq 60 ]] && { echo "Gave up after 60 attempts"; exit 1; }

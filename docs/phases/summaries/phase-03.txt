@@ -20,6 +20,9 @@ Install method (all operators use OLMv0 on 4.20 and 4.21):
      ℹ RHCL 1.3.5+ required (Wasm bug fixed in 1.3.5; no version pin)
      ⚠ Kuadrant Ready=False is EXPECTED (no GatewayClass yet)
   2. LeaderWorkerSet (always OLMv0) → wait CRD
+     ⚠ Requires cert-manager operator already installed (Phase 1 Step 1,
+       issueCerts=false on managed clusters) — else Degraded: MissingDependency
+       and DSC's KserveLLMInferenceServiceWideEPDependencies stays False
   3. Tempo + OpenTelemetry (always OLMv0) → wait CSVs Succeeded
      ⚠ Must be installed BEFORE RHOAI
   4. RHOAI operator → ask user: stable or ea

@@ -96,6 +96,19 @@ oc get kuadrant kuadrant -n kuadrant-system -o jsonpath='{.spec.observability.en
 > so OLMv1 (`ClusterExtension`) cannot be used. Always install via `oc apply -k` (OLMv0)
 > regardless of OCP version.
 
+> **Requires the cert-manager operator to be installed first** (its CRDs/controller — not any
+> `Issuer`/`Certificate`, and independent of `TLS_ISSUER` or managed/self-managed status).
+> Confirmed live (RHOAI 3.5, OSD/GCP): without it, `LeaderWorkerSetOperator cluster` reports
+> `Degraded: True (MissingDependency)` / `please make sure that cert-manager is installed on your
+> cluster`, and the DataScienceCluster's `KserveLLMInferenceServiceWideEPDependencies` condition
+> stays `False`, blocking overall `Ready`. On a managed cluster that skipped the rest of Phase 1,
+> you still need [Phase 1 Step 1](01-tls-cert-automation/README.md#step-1--cert-manager-operator-all-clusters-including-managed)
+> run with `--set issueCerts=false` (`cloud` can stay truthful to the actual platform — `issueCerts`
+> is what suppresses `Issuer`/`Certificate`/CCO involvement). If you installed LWS first and only noticed this afterward: install
+> the cert-manager operator, then kick `LeaderWorkerSetOperator` to re-check by deleting its
+> operator pod (`oc delete pod -n openshift-lws-operator -l <selector-matching-the-single-pod>`) —
+> it does not watch for the dependency appearing on its own.
+
 ```bash
 # Always OLMv0 (both OCP 4.20 and 4.21+):
 until oc apply -k ./gitops/operators/leader-worker-set; do

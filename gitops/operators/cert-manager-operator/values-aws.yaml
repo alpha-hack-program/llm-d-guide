@@ -1,4 +1,5 @@
-# Values for AWS deployments.
+# Values for AWS deployments using the self-managed Let's Encrypt flow.
 # Enables the Route53 DNS-01 CredentialsRequest and injects
 # CLOUD_CREDENTIALS_SECRET_NAME into the Subscription's spec.config.env.
+issueCerts: true
 cloud: aws

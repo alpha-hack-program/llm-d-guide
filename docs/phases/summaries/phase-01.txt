@@ -3,16 +3,23 @@
 ══════════════════════════════════════════════════════════════
 
 Goal:     Install cert-manager and automate TLS certificate lifecycle.
-Time:     ~15-20 min (or ~0 min on managed clusters — see Step 0)
+Time:     ~15-20 min (or ~5 min on managed clusters — TLS automation skipped,
+          but Step 1 bare operator install still required — see Step 0)
 Requires: CLOUD, TLS_ISSUER confirmed (plus: is this a managed cluster?)
 
 Steps:
   0. [Managed clusters — OSD/ROSA, any cloud] Check ingresscontroller/default
      .spec.defaultCertificate.name — if set, it's already a real public cert.
-     Use it directly, skip the rest of this phase entirely.
-  1. Install cert-manager operator [self-managed clusters]
+     Use it directly, skip Issuer/Certificate/local-ca entirely — but still
+     do Step 1 below.
+  1. Install cert-manager operator [ALL clusters, including managed —
+     chart takes two independent flags: cloud=aws|gcp|none (truthful
+     platform) and issueCerts=true|false (whether to actually wire up
+     DNS-01 ACME credentials). Managed clusters: issueCerts=false.]
      Retry loop handles the two-pass CRD race (CertManager CR not registered
-     until CSV succeeds).
+     until CSV succeeds). Required even when Step 0 applies: Phase 3's
+     LeaderWorkerSet operator hard-depends on the cert-manager operator
+     itself, independent of TLS setup.
   2a. [local-ca] Apply cert-manager-local-ca chart (same on every platform)
       → Inject CA into cluster trust bundle (MANDATORY on self-managed,
         BLOCKED by SRE webhook on managed OSD/ROSA clusters — use Step 0
@@ -32,6 +39,7 @@ Cloud-specific guides:
 Human gate:
   - All certificates show READY=True (or: using the existing managed-cluster cert)
   - Do NOT proceed with any cert showing False or Issuing
+  - cert-manager operator CSV Succeeded (required on every cluster, see Step 1)
 
 Guide: docs/phases/01-tls-cert-automation/README.md
 ══════════════════════════════════════════════════════════════

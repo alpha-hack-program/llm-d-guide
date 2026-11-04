@@ -62,10 +62,11 @@ with CCO in Mint mode.
 Chart: [`gitops/operators/cert-manager-clouddns`](../../../gitops/operators/cert-manager-clouddns)
 (mirrors `cert-manager-route53`, using cert-manager's native Google CloudDNS ACME solver).
 
-Set `cloud=gcp` when installing the cert-manager operator (README Step 1):
+Set `cloud=gcp` and `issueCerts=true` when installing the cert-manager operator (README Step 1):
 
 ```bash
 CLOUD=gcp
+ISSUE_CERTS=true
 ```
 
 This adds `CLOUD_CREDENTIALS_SECRET_NAME=gcp-creds` to the operator Subscription and deploys a
