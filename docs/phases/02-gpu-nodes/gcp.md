@@ -54,7 +54,7 @@ ocm create machinepool --cluster "${OCM_CLUSTER_ID}" \
   --instance-type "${GCP_GPU_INSTANCE_TYPE}" \
   --replicas "${GPU_REPLICAS}" \
   --labels "node-role.kubernetes.io/gpu=" \
-  --taints "nvidia.com/gpu=:NoSchedule"
+  --taints "nvidia.com/gpu=true:NoSchedule"
 ```
 
 > **Multi-AZ:** unlike the AWS chart in this repo (which creates one `MachineSet` per AZ
