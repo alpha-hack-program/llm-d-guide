@@ -93,11 +93,54 @@ ExternalModel requires manual creation of the MaaSModelRef.
 `vertex-messages`. When any ExternalModel uses `apiFormat: messages`, the gateway enables
 `x-api-key` header auth cluster-wide.
 
+> **Side effect — automatic and cluster-wide, not a setting you toggle yourself:** the moment
+> *any* `ExternalModel` anywhere in the cluster has `apiFormat: messages`, the reconciler flips on
+> `x-api-key` header auth for the whole gateway — there is no separate flag to set or unset. It
+> stays on as long as at least one such `ExternalModel` exists, regardless of which namespace or
+> provider it belongs to, and is unrelated to any specific model's own auth. Creating a second or
+> third `messages`-format `ExternalModel` after the first is a no-op for this side effect (it's
+> already on); deleting the *last* one in the cluster would turn it back off. Agents: don't expect
+> to find an explicit config field for this — it only shows up as a behavior change (gateway now
+> expects `x-api-key`) after the fact, so mention it when adding or removing a `messages`-format
+> flavour.
+
 **Path format:** The MaaS gateway path for an ExternalModel is `/{namespace}/{ExternalModel.metadata.name}/v1/...`.
 Example: `https://maas.<domain>/maas-demo/qwen3-14b/v1/chat/completions`.
 
 **Only llm-d runtime supports MaaS:** The "Publish as MaaS endpoint" toggle in Advanced settings
 is only available when **Distributed inference with llm-d** is selected as the serving runtime.
+
+## Adding multiple `apiFormat` flavours of one upstream model
+
+A single upstream model can be exposed through several wire formats at once — e.g. one model
+reachable as an OpenAI-chat endpoint, an Anthropic-Messages endpoint, and an OpenAI-Responses
+endpoint — by creating multiple `ExternalModel` resources that share one `ExternalProvider` and
+`targetModel`, differing only in `apiFormat`/`path`/`metadata.name`. Live example on this cluster
+(namespace `llm-d-demo`, provider `deepseek-provider`, `targetModel: deepseek-flash`):
+
+| ExternalModel name | apiFormat | path |
+|---|---|---|
+| `deepseek-flash` | `openai-chat` | `/chat/completions` |
+| `deepseek-flash-anthropic` | `messages` | `/anthropic/v1/messages` |
+| `deepseek-flash-responses` | `openai-responses` | `/responses` |
+
+Recipe for adding a new flavour set (agents: follow this exactly, don't improvise field names):
+
+1. **One `ExternalProvider` per backend host.** Create it once; every flavour of every model on
+   that host reuses it via `externalProviderRefs[].ref.name`. `endpoint` is host-only, no scheme,
+   no path (e.g. `api.example.com`, not `https://api.example.com/v1`) — the `path` on each
+   `ExternalModel` supplies the rest of the upstream URL, appended directly to `endpoint`.
+2. **One `ExternalModel` per desired `apiFormat`**, same `targetModel`, names suffixed by flavour
+   (`<model>`, `<model>-anthropic`, `<model>-responses`). The `path` must match what the *backend*
+   actually exposes for that wire format — **not every backend supports all three formats**.
+   Confirm against the provider's own API docs before assuming a path like `/anthropic/v1/messages`
+   or `/responses` exists; a plain OpenAI-compatible gateway (e.g. one built on
+   `@ai-sdk/openai-compatible`) may only support `openai-chat`, in which case skip the other
+   flavours or verify their paths first.
+3. **One `MaaSModelRef` per `ExternalModel`**, name identical to the `ExternalModel` it targets
+   (per requirement 2 above). `MaaSModelRef` reaches `Ready` only after a `MaaSSubscription` +
+   `MaaSAuthPolicy` pairing exists for it (Phase 6/7) — `RuntimeHealthy: True` with
+   `GovernanceAttached: False` right after creation is expected, not a failure.
 
 ## Migration from 3.4 ExternalModel
 
