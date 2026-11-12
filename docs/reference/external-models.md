@@ -142,6 +142,106 @@ Recipe for adding a new flavour set (agents: follow this exactly, don't improvis
    `MaaSAuthPolicy` pairing exists for it (Phase 6/7) — `RuntimeHealthy: True` with
    `GovernanceAttached: False` right after creation is expected, not a failure.
 
+Worked example — three flavours of one model (`my-model`) behind one provider:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-provider-credentials
+  namespace: maas-demo
+  labels:
+    inference.llm-d.ai/ipp-managed: "true"
+type: Opaque
+data:
+  api-key: <base64-encoded-api-key>
+---
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalProvider
+metadata:
+  name: my-provider
+  namespace: maas-demo
+spec:
+  provider: openai
+  endpoint: api.example.com
+  auth:
+    type: apikey
+    secretRef:
+      name: my-provider-credentials
+---
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalModel
+metadata:
+  name: my-model
+  namespace: maas-demo
+spec:
+  externalProviderRefs:
+  - ref:
+      name: my-provider
+    targetModel: my-model
+    apiFormat: openai-chat
+    path: /v1/chat/completions
+    weight: 100
+---
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalModel
+metadata:
+  name: my-model-anthropic
+  namespace: maas-demo
+spec:
+  externalProviderRefs:
+  - ref:
+      name: my-provider
+    targetModel: my-model
+    apiFormat: messages
+    path: /v1/messages
+    weight: 100
+---
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalModel
+metadata:
+  name: my-model-responses
+  namespace: maas-demo
+spec:
+  externalProviderRefs:
+  - ref:
+      name: my-provider
+    targetModel: my-model
+    apiFormat: openai-responses
+    path: /v1/responses
+    weight: 100
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: my-model
+  namespace: maas-demo
+spec:
+  modelRef:
+    kind: ExternalModel
+    name: my-model
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: my-model-anthropic
+  namespace: maas-demo
+spec:
+  modelRef:
+    kind: ExternalModel
+    name: my-model-anthropic
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: my-model-responses
+  namespace: maas-demo
+spec:
+  modelRef:
+    kind: ExternalModel
+    name: my-model-responses
+```
+
 ## Migration from 3.4 ExternalModel
 
 Old `maas.opendatahub.io` ExternalModels are auto-migrated but non-functional. To clean up:
